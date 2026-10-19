@@ -144,6 +144,41 @@ function runLive(cmd, args, opts, kind) {
 
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36'
 
+/**
+ * 建 venv —— Python 版本逐级降级：3.12 → 3.11 → 3.10。
+ * uv 会自己下对应版本的 Python，不依赖系统里装了什么，
+ * 所以用户系统里是 3.8 还是根本没装都不影响。
+ * 只有三个版本全下不下来才失败，而且说清楚为什么、怎么办。
+ */
+async function makeVenv(dir, kind, label) {
+  const versions = ['3.12', '3.11', '3.10']
+  let lastErr = ''
+  for (let i = 0; i < versions.length; i++) {
+    const v = versions[i]
+    pushProgress(kind, `创建 ${label} 的 Python 环境（${v}）…`)
+    const r = await runLive(UV_EXE, ['venv', '--python', v, dir], {
+      cwd: BILI_DIR, timeout: 240000,
+    }, kind)
+    if (r.code === 0) {
+      pushProgress(kind, `✓ Python ${v} 环境建好了`)
+      return { step: 'venv', ok: true, version: v }
+    }
+    lastErr = ((r.out || '') + (r.err || '')).trim().slice(-300)
+    if (i < versions.length - 1) {
+      pushProgress(kind, `${v} 装不上，换 ${versions[i + 1]} 再试…`)
+    }
+  }
+  pushProgress(kind, '✗ 3.12 / 3.11 / 3.10 都建不起来')
+  return {
+    step: 'venv',
+    ok: false,
+    message: 'Python 环境建不出来：3.12 / 3.11 / 3.10 三个版本都试过了。\n'
+      + '常见原因：① 网络下不到 Python ② 磁盘空间不够 ③ 杀软拦住了 uv。\n'
+      + '手动办法：自己装一个 Python 3.10+ 并加入 PATH，再点一次「装主依赖」。\n'
+      + (lastErr ? '\nuv 的原始报错（最后一段）：\n' + lastErr : ''),
+  }
+}
+
 function readJson(file, fallback) {
   try {
     return JSON.parse(readFileSync(file, 'utf8'))
@@ -348,16 +383,12 @@ export function apply(ctx) {
       }
       const asrPy = join(BILI_DIR, '.venv-asr', 'Scripts', process.platform === 'win32' ? 'python.exe' : 'python')
       const steps = []
-      // 1. 建 venv-asr
+      // 1. 建 venv-asr（同样走 3.12 → 3.11 → 3.10 降级）
       if (!existsSync(asrPy)) {
-        pushProgress('asr', '创建转写环境（venv-asr）…')
-        const r = await runLive(UV_EXE, ['venv', '--python', '3.12', join(BILI_DIR, '.venv-asr')], {
-          cwd: BILI_DIR, timeout: 180000,
-        }, 'asr')
-        steps.push({ step: 'venv', code: r.code, detail: ((r.out || '') + (r.err || '')).slice(-400) })
-        if (r.code !== 0) {
-          pushProgress('asr', '✗ 建环境失败')
-          return send(res, 200, { ok: false, steps })
+        const ver = await makeVenv(join(BILI_DIR, '.venv-asr'), 'asr', '转写环境')
+        steps.push(ver)
+        if (!ver.ok) {
+          return send(res, 200, { ok: false, error: ver.message, steps })
         }
       }
       // 2. 装包
@@ -568,16 +599,16 @@ export function apply(ctx) {
         steps.push({ step: 'uv', ok: true })
       }
 
-      // 2. 建 venv（没有才建）
+      // 2. 建 venv（没有才建）—— 版本按 3.12 → 3.11 → 3.10 逐级降，别写死一个
       if (!existsSync(PY_EXE)) {
-        pushProgress('env', '创建 Python 环境（venv）…')
-        const r = await runLive(UV_EXE, ['venv', '--python', '3.12', join(BILI_DIR, '.venv')], {
-          cwd: BILI_DIR, timeout: 180000,
-        }, 'env')
-        steps.push({ step: 'venv', code: r.code, detail: ((r.out || '') + (r.err || '')).slice(-400) })
-        if (r.code !== 0) {
-          pushProgress('env', '✗ 建 venv 失败')
-          return send(res, 200, { ok: false, steps })
+        const ver = await makeVenv(join(BILI_DIR, '.venv'), 'env', '主依赖')
+        steps.push(ver)
+        if (!ver.ok) {
+          return send(res, 200, {
+            ok: false,
+            error: ver.message,
+            steps,
+          })
         }
       }
 
