@@ -31,6 +31,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -152,11 +153,13 @@ async def cmd_search(args):
     if args.order not in ("totalrank", "click", "pubdate", "dm"):
         raise SystemExit("--order 只能是 totalrank / click / pubdate / dm")
     raw = await core.bili_search(keyword=args.keyword, num=args.num, order=args.order)
-    # 播放量门槛：只保留 play >= min_play 的
+
     min_play = int(getattr(args, "min_play", 0) or 0)
-    if min_play <= 0:
+    since_days = int(getattr(args, "since_days", 0) or 0)
+    if min_play <= 0 and since_days <= 0:
         emit(raw)
         return
+
     try:
         data = json.loads(raw) if isinstance(raw, str) else raw
     except Exception:
@@ -165,10 +168,29 @@ async def cmd_search(args):
     if not isinstance(data, dict) or not isinstance(data.get("videos"), list):
         emit(data)
         return
+
     before = len(data["videos"])
-    data["videos"] = [v for v in data["videos"] if int(v.get("play") or 0) >= min_play]
+
+    if min_play > 0:
+        data["videos"] = [v for v in data["videos"] if int(v.get("play") or 0) >= min_play]
+        data["minPlay"] = min_play
+
+    if since_days > 0:
+        now = time.time()
+        kept = []
+        for v in data["videos"]:
+            # 不同接口字段名不一样，挨个试
+            t = v.get("created") or v.get("pubdate") or v.get("pubDate") or 0
+            try:
+                t = float(t)
+            except (TypeError, ValueError):
+                t = 0
+            if t <= 0 or (now - t) <= since_days * 86400:
+                kept.append(v)
+        data["videos"] = kept
+        data["sinceDays"] = since_days
+
     data["count"] = len(data["videos"])
-    data["minPlay"] = min_play
     data["filteredOut"] = before - len(data["videos"])
     emit(data)
 
@@ -500,6 +522,8 @@ def main() -> int:
     p.add_argument("--order", default="totalrank", help="totalrank / click / pubdate / dm")
     p.add_argument("--min-play", type=int, default=0,
                    help="只要播放量 >= 这个数的（0=不限）。关键词轮默认传 50000")
+    p.add_argument("--since-days", type=int, default=3,
+                   help="只看最近几天的（0=不限）。默认 3，跟 config.json 的 searchDays 对齐")
     p.set_defaults(func=cmd_search)
 
     p = sub.add_parser("subtitle", help="取 AI 字幕全文")

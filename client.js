@@ -366,6 +366,7 @@ window.__ModuleLoader__.load({
             scheduleSessionId: sessionId || '',
             keywords: (cfg.keywords || []).map((s) => String(s).trim()).filter(Boolean),
             minPlay: Number(cfg.minPlay) || 0,
+            searchDays: Number(cfg.searchDays) || 0,
             perDay: Number(cfg.perDay) || 0,
             commentPerRound: Number(cfg.commentPerRound) || 0,
             autoComment: !!cfg.autoComment,
@@ -604,6 +605,12 @@ window.__ModuleLoader__.load({
             note: '低于这个数的视频直接不看。UP 主新视频不受此限。0 = 不限',
             value: cfg.minPlay, min: 0,
             onChange: (v) => set('minPlay', v),
+          }),
+          h(NumField, {
+            label: '查最近几天',
+            note: '关键词轮只看最近几天发的视频。0 = 不限',
+            value: cfg.searchDays ?? 3, min: 0, max: 30,
+            onChange: (v) => set('searchDays', v),
           }),
           h(NumField, {
             label: '每轮挑几个并 @ 你',

@@ -60,9 +60,20 @@ function ensureHomeFiles() {
     for (const f of ['bili.py', 'mcp_server.py', 'requirements.txt']) {
       const to = join(BILI_DIR, f)
       const from = join(VENDOR_DIR, f)
-      if (!existsSync(to) && existsSync(from)) {
-        copyFileSync(from, to)
+      if (!existsSync(from)) continue
+      // ⚠️ 不能只看「存不存在」—— 插件升级后包里的脚本会变（比如加了 --since-days），
+      //    只铺缺失的话家目录永远是旧版，新功能装了也不生效。内容不一样就覆盖。
+      let needCopy = !existsSync(to)
+      if (!needCopy) {
+        try {
+          const a = readFileSync(from)
+          const b = readFileSync(to)
+          needCopy = a.length !== b.length || !a.equals(b)
+        } catch {
+          needCopy = true
+        }
       }
+      if (needCopy) copyFileSync(from, to)
     }
     return true
   } catch {
@@ -276,7 +287,7 @@ export function apply(ctx) {
       }
       // 只接受白名单键，别让设置页把别的东西写进来
       const ALLOWED = new Set([
-        'autoRun', 'slots', 'keywords', 'minPlay', 'perDay', 'commentPerRound',
+        'autoRun', 'slots', 'keywords', 'minPlay', 'perDay', 'commentPerRound', 'searchDays',
         'autoComment', 'mentionName', 'transcribe', 'asrModel',
         'watchedUps', 'upCommentPerRound', 'upCommentPerDay', 'upSinceDays', 'scheduleSessionId',
         'personaFile',

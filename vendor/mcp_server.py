@@ -267,6 +267,8 @@ async def bili_search(keyword: str, num: int = 10, order: str = "totalrank") -> 
             "danmaku": item.get("video_review", 0),
             "duration": item.get("duration", ""),
             "description": item.get("description", "")[:200],
+            # 发布时间（Unix 秒）—— bili.py 的 --since-days 靠它筛，别删
+            "pubdate": item.get("pubdate", 0),
         })
 
     return json.dumps({"keyword": keyword, "count": len(videos), "videos": videos}, ensure_ascii=False)
