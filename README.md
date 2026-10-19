@@ -28,6 +28,20 @@ dsh plugin add file:D:\下载\feiyu-bili-settings-0.4.4.tgz
 
 ⚠️ **装完必须重启一次 DSH**（插件在 bundle 层组装）。
 
+### 方式三：在 DSH 界面里点「添加插件」
+
+1. 打开 DSH → **插件** 页面
+2. 点右上角「**+ 添加插件**」
+3. 在输入框里贴：
+
+```
+github:tianding123/feiyu-bili-settings
+```
+
+4. 点安装
+
+> 如果提示「无法访问 GitHub」或「连接 GitHub 超时」，界面上会有「**改用国内镜像**」按钮，点它就行。
+
 ## 首次配置（三步）
 
 1. **装主依赖** —— 设置页点「装主依赖」。没 Python 也没 uv 也行，插件会自己下一份 uv（约 30 MB），自动建 venv、装 110 个包。走国内镜像。
