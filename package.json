@@ -1,0 +1,66 @@
+{
+  "name": "feiyu-bili-settings",
+  "version": "0.4.5",
+  "description": "DSH 设置页里的「刷B站」子页面 —— 改关键词、播放量门槛、每轮挑几条、UP 主名单、@ 谁，直接写进 bili-duty 的 config.json",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "bilibili",
+    "settings"
+  ],
+  "license": "MIT",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "cordis.patch.yml",
+    "lib",
+    "vendor",
+    "LICENSE",
+    "README.md"
+  ],
+  "engines": {
+    "dsh": ">=0.1.7-rc.1",
+    "node": ">=22"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/dsh-tools": "*",
+    "@deepseek-ai/schemastery": "*"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/dsh-tools": {
+      "optional": true
+    },
+    "@deepseek-ai/schemastery": {
+      "optional": true
+    }
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-runtime",
+        "@deepseek-ai/dsh-client-ui-settings"
+      ]
+    }
+  },
+  "author": "tianding123",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tianding123/feiyu-bili-settings.git"
+  },
+  "homepage": "https://github.com/tianding123/feiyu-bili-settings#readme",
+  "bugs": {
+    "url": "https://github.com/tianding123/feiyu-bili-settings/issues"
+  }
+}

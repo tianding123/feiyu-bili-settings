@@ -1,0 +1,6 @@
+# feiyu-bili-settings —— DSH bundle patch
+# 装上之后，profile 只要在 dsh.profile.bundles 里列出本包名即生效。
+
+- insert:
+    - id: feiyu-bili-settings
+      name: feiyu-bili-settings
