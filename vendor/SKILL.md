@@ -18,8 +18,8 @@ description: 替用户刷B站。用户说「刷B站 / 看B站 / 最近有什么�
 
 ```bat
 python bili.py status
-python bili.py search "关键词" --num 10 --order pubdate    :: pubdate=最新
-python bili.py search "关键词" --num 10 --min-play 50000    :: 只要播放量 ≥ 5 万的
+python bili.py search "关键词" --num 42 --order pubdate    :: pubdate=最新
+python bili.py search "关键词" --num 42 --min-play 50000    :: 只要播放量 ≥ 5 万的
 python bili.py search "关键词" --since-days 3                :: 只要最近 3 天的（0=不限）
 python bili.py subtitle BVxxxxxxxxxx
 python bili.py comments BVxxxxxxxxxx --num 30
@@ -102,8 +102,11 @@ subagent {
 每个关键词搜指定天数的视频（默认近 3 天，看 config.json 的 `searchDays`），所有结果汇总后挑出最值得的 {n} 条，每条都要读字幕原文。
 
 步骤：
-1. 对每个关键词跑：bili.py search "<该关键词>" --num 10 --order pubdate --min-play <门槛> --since-days <config.json 的 searchDays，没填就用 3>
-   （返回里的 `filteredOut` 是被门槛/天数筛掉几条，报告里可以提一句）
+1. 对每个关键词跑：bili.py search "<该关键词>" --num 42 --order pubdate --min-play <门槛> --since-days <config.json 的 searchDays，没填就用 3>
+   ⚠️ **`--num` 必须给 42**（B站 搜索第一页上限）。给 10 等于只看「最近上传的 10 条」，
+      刚发几小时的视频播放量还没爬上来，门槛必然全灭 —— 这是实测踩过的坑（2026-10-20）。
+   ⚠️ 而且**热门词的第一页覆盖范围很短**（「原神剧情」42 条只覆盖 5 小时），
+      要真覆盖几天得翻页；现在没有翻页能力，所以窗口别设太小。
 2. 汇总所有关键词的结果，**跨关键词去重**（同一 BV 只算一次）
 3. 对照工作目录里的 seen.md 判重（BV 号出现过就跳过）
 4. 对每个候选跑 bili.py subtitle <BV号> 读原文；没字幕就直接跳过（别转写）
