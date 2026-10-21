@@ -26,10 +26,14 @@ description: 替用户刷B站。用户说「刷B站 / 看B站 / 最近有什么�
 | `mentionName` | @ 谁 | — |
 | `autoComment` | 发不发评论 | — |
 | `autoRun` | 总开关 | — |
-| `transcribe` | 没字幕时转不转写 | — |
-| `watchedUps` | 固定 UP 主名单 | — |
+| `watchedUps` | 固定 UP 主名单（数组，随便加减） | — |
 | `upCommentPerRound` | UP 主轮每轮评论上限 | — |
-| `upSinceDays` | UP 主查几天内的 | ❌「3 天」是举例 |
+| `upCommentPerDay` | UP 主轮每天评论上限 | — |
+| `upSinceDays` | UP 主查几天内 | ❌「3 天」是举例 |
+| `upNotify` | UP 主更新要不要通知 | — |
+| `personaFile` | 人设文件路径 | ✅ 留空 = 用当前会话自己的人格（正常用法） |
+| `transcribe` | 没字幕时转不转写 | — |
+| `asrModel` | 转写模型档位 | ❌ 别写死 small/medium |
 
 ⚠️ **插件设置页改的就是这个文件** —— 用户把门槛调成 8000，这里就必须跑 8000。
 **只有字段缺失时才用下面的示例值兜底，并且要在回复里说一句「用的默认值」。**
@@ -138,7 +142,8 @@ subagent {
       要真覆盖几天得翻页；现在没有翻页能力，所以窗口别设太小。
 2. 汇总所有关键词的结果，**跨关键词去重**（同一 BV 只算一次）
 3. 对照工作目录里的 seen.md 判重（BV 号出现过就跳过）
-4. 对每个候选跑 bili.py subtitle <BV号> 读原文；没字幕就直接跳过（别转写）
+4. 对每个候选跑 bili.py subtitle <BV号> 读原文；
+   没字幕时看 config.json 的 `transcribe`：**`true` → 跑 `bili.py asr <BV号>` 本地转写**；`false` → 直接跳过
 5. 顺手 bili.py comments <BV号> --num 10 翻一眼评论区
 6. 输出一份内部报告，**不要发评论、不要写文件、不要改 state.json 或 seen.md**
 
