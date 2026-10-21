@@ -55,6 +55,7 @@ python bili.py subtitle BVxxxxxxxxxx
 python bili.py comments BVxxxxxxxxxx --num 30
 python bili.py asr BVxxxxxxxxxx                            :: 没字幕时本地转写（transcribe=true 才用）
 python bili.py reply BVxxxxxxxxxx "正文"                   :: config 开关/--force 才放行
+python bili.py dm BVxxxxxxxxxx "正文"                      :: 发私信（开头自动带 BV 号；dmOnly 才放行）
 python bili.py login                                       :: 重新扫码（阻塞轮询）
 python bili.py whoami
 python bili.py ups                                         :: 看固定 UP 主名单与各自最新投稿
@@ -65,6 +66,18 @@ python bili.py up-feed --since-days <upSinceDays>          :: 查固定 UP 主�
 返回里 `seenSkipped` = 剔掉几条、`seenTotal` = 表里总共多少条。
 **所以不用再手动比对 seen.md 了**，拿到的 `videos` 全是没看过的。
 想看全部（调试）加 `--keep-seen`。
+
+## 投递方式（两种，互斥 —— 2026-10-22 加）
+
+**看 `config.json` 的两个开关，哪个是 `true` 就走哪条**（两个都 false 就只写日报）：
+
+| 开关 | 用什么命令 | 说明 |
+|---|---|---|
+| `autoComment: true` | `bili.py reply <BV> "正文"` | 发公开评论，正文里 @ `mentionName` |
+| `dmOnly: true` | `bili.py dm <BV> "正文"` | 发**私信**给 `mentionName` 那个号，**BV 号自动加在私信开头** |
+| 两个都 false | 都不发 | 只写日报 |
+
+⚠️ 私信模式每轮最多 **1~2 条**，别刷屏（B站 私信风控比评论严）。
 
 ## 播放量门槛（⭐ 用户 2026-10-19 定的规则，**数值以 config.json 为准**）
 
