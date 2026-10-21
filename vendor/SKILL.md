@@ -8,6 +8,32 @@ description: 替用户刷B站。用户说「刷B站 / 看B站 / 最近有什么�
 **位置**：家目录的 `bili-duty/` —— `~/.dsh/bili-duty/`（Windows 上是 `%USERPROFILE%\.dsh\bili-duty\`）。配置、凭证、报告、venv、脚本全在里面。
 凭证、判重表、配置都在这个目录里；**不依赖 `dsh-bili-scroll` 插件**。
 
+## 🔴 第 -1 步：所有数值都从 config.json 读，本文件里的数字只是**举例**
+
+**本文件里出现的 50000 / 42 / 5 条 / 3 天 / 6 个词 —— 全部是【示例】，不是硬编码。**
+真值只有一个来源：`~/.dsh/bili-duty/config.json`（Windows 上是 `%USERPROFILE%\.dsh\bili-duty\config.json`）。
+
+**每轮开工前先读一遍这个文件，把下面这些字段取出来**，后面所有命令都用取到的值：
+
+| 字段 | 管什么 | 本文件里容易被误当成固定值 |
+|---|---|---|
+| `minPlay` | 关键词搜索的播放量门槛 | ❌「50000」是举例 |
+| `searchDays` | 关键词搜几天内的 | ❌「3 天」是举例 |
+| `keywords` | 搜哪些词 | ❌「6 个词」是举例，以数组长度为准 |
+| `perRound` | 每轮挑几条 | ❌「5 条」是举例 |
+| `commentPerRound` | 每轮发几条评论 | ❌「5 条」是举例 |
+| `perDay` | 每天最多几轮 | — |
+| `mentionName` | @ 谁 | — |
+| `autoComment` | 发不发评论 | — |
+| `autoRun` | 总开关 | — |
+| `transcribe` | 没字幕时转不转写 | — |
+| `watchedUps` | 固定 UP 主名单 | — |
+| `upCommentPerRound` | UP 主轮每轮评论上限 | — |
+| `upSinceDays` | UP 主查几天内的 | ❌「3 天」是举例 |
+
+⚠️ **插件设置页改的就是这个文件** —— 用户把门槛调成 8000，这里就必须跑 8000。
+**只有字段缺失时才用下面的示例值兜底，并且要在回复里说一句「用的默认值」。**
+
 **解释器**（依赖装在家目录的独立 venv）：
 
 ```text
@@ -19,24 +45,25 @@ description: 替用户刷B站。用户说「刷B站 / 看B站 / 最近有什么�
 ```bat
 python bili.py status
 python bili.py search "关键词" --num 42 --order pubdate    :: pubdate=最新
-python bili.py search "关键词" --num 42 --min-play 50000    :: 只要播放量 ≥ 5 万的
-python bili.py search "关键词" --since-days 3                :: 只要最近 3 天的（0=不限）
+python bili.py search "关键词" --num 42 --min-play <minPlay>    :: <minPlay> = config.json 里的值
+python bili.py search "关键词" --since-days <searchDays>       :: 只要最近 N 天的（0=不限）
 python bili.py subtitle BVxxxxxxxxxx
 python bili.py comments BVxxxxxxxxxx --num 30
-python bili.py asr BVxxxxxxxxxx                            :: 没字幕时本地转写（开了才用）
+python bili.py asr BVxxxxxxxxxx                            :: 没字幕时本地转写（transcribe=true 才用）
 python bili.py reply BVxxxxxxxxxx "正文"                   :: config 开关/--force 才放行
 python bili.py login                                       :: 重新扫码（阻塞轮询）
 python bili.py whoami
 python bili.py ups                                         :: 看固定 UP 主名单与各自最新投稿
-python bili.py up-feed --since-days 3                      :: 查固定 UP 主有没有新视频
+python bili.py up-feed --since-days <upSinceDays>          :: 查固定 UP 主有没有新视频
 ```
 
-## 播放量门槛（⭐ 用户 2026-10-19 定的）
+## 播放量门槛（⭐ 用户 2026-10-19 定的规则，**数值以 config.json 为准**）
 
-- **关键词搜索：播放量 ≥ 50000**（`config.json` 的 `minPlay`）——搜的时候加 `--min-play 50000`。
-  低于 5 万的根本不进入候选，别读字幕别写日报。
+- **关键词搜索：播放量 ≥ `minPlay`**（`config.json` 的 `minPlay` 字段）——搜的时候加 `--min-play <minPlay>`。
+  ⚠️ **`minPlay` 是动态的**：用户在设置页把它改成多少，这里就用多少。**不要写死任何数字。**
+  低于门槛的根本不进入候选，别读字幕别写日报。
 - **固定 UP 主监控：不加门槛** —— UP 主发什么就看什么，播放量再低也照常处理。
-  这条是用户明确要求的，别给 UP 主轮也套 5 万门槛。
+  这条是用户明确要求的，别给 UP 主轮也套关键词门槛。
 
 ## 🔴 第 0 步：总开关（每轮先查这个）
 
@@ -56,7 +83,7 @@ python bili.py up-feed --since-days 3                      :: 查固定 UP 主�
 - 首次监控某个 UP 主只记账（返回 `firstRun: true`），不把历史视频当新的；
 - ⭐ 每轮**先跑 up-feed**，UP 主的新视频优先处理；值得的固定发评论 @ `mentionName`（每轮最多 `upCommentPerRound` 条）。
 - 🟢 **UP 主轮不设播放量门槛** —— 他们发了什么就看什么，再低也照常读字幕判断。
-  ⚠️ 5 万门槛只针对关键词搜索，别套到这儿。
+  ⚠️ `minPlay` 门槛只针对关键词搜索，别套到这儿。
 - 🔴 **UP 主轮的评论，最前面必须原样加这句固定开头（一个字都不能改）：**
   `主人！您关注的UP主更新啦！`
   空一格再接正文（哪个 UP 主、发了什么、为什么值得看）。
@@ -75,15 +102,17 @@ subagent {
   provider: 'buddy',
   model: 'hy3',
   description: '刷B站：<午间/傍晚>',
-  prompt: <下面这段模板，把 {direction} 换成**整份关键词列表**、{n} 换成 5>
+  prompt: <下面这段模板，{direction} 换成 config.json 的**整个 keywords 数组**（用「、」连起来）、
+           {n} 换成 config.json 的 perRound、{minPlay} 换成 config.json 的 minPlay、
+           {days} 换成 config.json 的 searchDays>
 }
 ```
 
 `buddy/hy3` 是免费的。**一次只派一个子代理**，把**全部关键词**作为 `{direction}` 传进去（用「、」分隔），
 子代理会**每个都搜一遍**。
 
-⚠️ `{direction}` **不是只放一个词** —— 从插件 config.json 的 `keywords` 字段读全部（现在是 6 个：
-星穹铁道剧情、星铁剧情、星穹铁道假药、星铁假药、原神剧情、dsh），整串传给子代理。漏词等于漏看。
+⚠️ `{direction}` **不是只放一个词** —— 从 config.json 的 `keywords` 字段读**全部**关键词
+（数量以数组长度为准，用户随时会加/删），整串传给子代理。漏词等于漏看。
 
 ### 子代理 prompt 模板
 
@@ -96,13 +125,13 @@ subagent {
 任务：下面这些关键词，**每一个都要单独搜一遍**（不是只搜第一个）：
   {direction}
 
-🔴 **播放量门槛：只保留播放量 ≥ 50000 的视频**（搜索时加 `--min-play 50000`）。
-低于 5 万的不进入候选，不用读字幕、不用写进报告。
+🔴 **播放量门槛：只保留播放量 ≥ {minPlay} 的视频**（搜索时加 `--min-play {minPlay}`）。
+低于门槛的不进入候选，不用读字幕、不用写进报告。
 
-每个关键词搜指定天数的视频（默认近 3 天，看 config.json 的 `searchDays`），所有结果汇总后挑出最值得的 {n} 条，每条都要读字幕原文。
+每个关键词搜近 {days} 天的视频，所有结果汇总后挑出最值得的 {n} 条，每条都要读字幕原文。
 
 步骤：
-1. 对每个关键词跑：bili.py search "<该关键词>" --num 42 --order pubdate --min-play <门槛> --since-days <config.json 的 searchDays，没填就用 3>
+1. 对每个关键词跑：bili.py search "<该关键词>" --num 42 --order pubdate --min-play {minPlay} --since-days {days}
    ⚠️ **`--num` 必须给 42**（B站 搜索第一页上限）。给 10 等于只看「最近上传的 10 条」，
       刚发几小时的视频播放量还没爬上来，门槛必然全灭 —— 这是实测踩过的坑（2026-10-20）。
    ⚠️ 而且**热门词的第一页覆盖范围很短**（「原神剧情」42 条只覆盖 5 小时），
@@ -128,7 +157,7 @@ subagent {
 
 ### 拿到报告之后（你自己做）
 
-1. 从报告里挑最值得的 5 条，**每条单独发一条评论 @ `mentionName`**（config.json 里填的那个人，按「评论怎么写」那节，用你自己的口吻）；
+1. 从报告里挑最值得的 `perRound` 条（**数量读 config.json，别写死**），**每条单独发一条评论 @ `mentionName`**（config.json 里填的那个人，按「评论怎么写」那节，用你自己的口吻）；
 2. 写日报到 `out/<今天>.md`（可以比报告更简）；
 3. 更新 `seen.md` 和 `state.json`（含 `runs` 标记）。
 
@@ -155,23 +184,25 @@ subagent {
 ⚠️ **手动测试**触发的轮次不查也不写 `runs`（prompt 里会明说）。
 
 **第 2 步 · 固定 UP 主（本鱼自己看，独立配额）** —— 跑
-`bili.py up-feed --since-days <config.json 里的 upSinceDays，没填就用 3>`，
+`bili.py up-feed --since-days <config.json 里的 upSinceDays>`，
 有新视频就读字幕判断、值得的发评论 @（**评论最前面必须原样加「主人！您关注的UP主更新啦！」**）。
-**不加播放量门槛**，不占关键词那 5 个名额。
+**不加播放量门槛**，不占关键词那 `perRound` 个名额。
 
 **第 3 步 · 关键词（派子代理，占上下文的大头）** —— 按上面「⭐ 优先用「派子代理」的方式」那节：
-把 `config.json` 的**全部关键词**交给 `buddy/hy3` 子代理，**播放量 ≥ `minPlay`**（现在 50000），
-子代理出内部报告。
+把 `config.json` 的**全部关键词**交给 `buddy/hy3` 子代理，
+**播放量 ≥ `minPlay`**（**从 config.json 读，不许写死**），
+**搜近 `searchDays` 天**，子代理出内部报告。
 
-**第 4 步 · 发评论** —— 拿报告挑最值得的 `commentPerRound` 条（现在 5），每条单独发一条评论 @ `mentionName`，
-用本鱼自己的口吻（关键词轮**不加**那句固定开头）。发完用 `reply/main?mode=2` 复核。
+**第 4 步 · 发评论** —— 拿报告挑最值得的 `commentPerRound` 条（**从 config.json 读**），
+每条单独发一条评论 @ `mentionName`，用本鱼自己的口吻（关键词轮**不加**那句固定开头）。
+发完用 `reply/main?mode=2` 复核。
 
 **第 5 步 · 收尾** —— 写日报 `out/<今天>.md`、更新 `seen.md` 和 `state.json`（含 `runs` 标记）。
 
 ## 一轮流程（手动跑 / 参考 `duty.md`）
 
-1. 读 `config.json`：`perDay` / `keywords` / `autoComment` / `mentionName` / `transcribe`
-2. 每个关键词 `search`，`--order pubdate` 优先，挑**近 7 天**
+1. 读 `config.json`：`perDay` / `keywords` / `searchDays` / `minPlay` / `autoComment` / `mentionName` / `transcribe`
+2. 每个关键词 `search`，`--order pubdate` 优先，挑**近 `searchDays` 天**
 3. 判重：读 `seen.md`，BV 号出现过的直接跳过
 4. 逐条判断：先 `subtitle`；没字幕且 `transcribe=true` → `asr`；顺手 `comments`
 5. 写报告 `out/<今天>.md`：标题 / UP / 链接 / 播放量 / 为什么值得（两三句）/ 一句话；结尾总结
