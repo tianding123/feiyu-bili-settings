@@ -479,6 +479,7 @@ export function apply(ctx) {
         'autoRun', 'slots', 'keywords', 'minPlay', 'perDay', 'commentPerRound', 'searchDays',
         'autoComment', 'mentionName', 'transcribe', 'asrModel',
         'watchedUps', 'upCommentPerRound', 'upCommentPerDay', 'upSinceDays', 'scheduleSessionId',
+        'blockedUps',
         'personaFile',
       ])
       const cur = readJson(CFG_FILE, {})
