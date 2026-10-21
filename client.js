@@ -446,6 +446,7 @@ window.__ModuleLoader__.load({
             perDay: Number(cfg.perDay) || 0,
             commentPerRound: Number(cfg.commentPerRound) || 0,
             autoComment: !!cfg.autoComment,
+            dmOnly: !!cfg.dmOnly,
             mentionName: String(cfg.mentionName || '').trim(),
             transcribe: !!cfg.transcribe,
             asrModel: String(cfg.asrModel || 'small'),
@@ -957,17 +958,31 @@ window.__ModuleLoader__.load({
             '填了 uid 就按 uid 比（最准，不怕改名）；没填 uid 才按昵称比。'),
         ),
 
-        // ── 评论 ──
-        h(Section, { title: '发评论', lined: true },
+        // ── 呼叫主人 ──
+        h(Section, { title: '呼叫主人', lined: true },
           h(Toggle, {
             label: '自动评论并 @ 我',
             note: '关掉就只写日报，不在评论区说话',
             value: !!cfg.autoComment,
-            onChange: (v) => set('autoComment', v),
+            onChange: (v) => {
+              set('autoComment', v)
+              // 跟下面那个互斥：打开这个就把「仅私信」关掉
+              if (v) set('dmOnly', false)
+            },
+          }),
+          h(Toggle, {
+            label: '仅私信不评论',
+            note: '不走评论区，直接发 B站 私信给你（用上面「要 @ 谁」那个账号，需要能查到 uid）',
+            value: !!cfg.dmOnly,
+            onChange: (v) => {
+              set('dmOnly', v)
+              // 跟上面那个互斥：打开这个就把「自动评论」关掉
+              if (v) set('autoComment', false)
+            },
           }),
           h(TextField, {
             label: '要 @ 谁',
-            note: '纯文本 @，填你在 B站的昵称',
+            note: '纯文本 @，填你在 B站的昵称（私信模式也用它当收件人）',
             value: cfg.mentionName,
             placeholder: '例如：你的B站昵称',
             onChange: (v) => set('mentionName', v),
