@@ -478,6 +478,7 @@ export function apply(ctx) {
       const ALLOWED = new Set([
         'autoRun', 'slots', 'keywords', 'minPlay', 'perDay', 'commentPerRound', 'searchDays',
         'autoComment', 'mentionName', 'transcribe', 'asrModel',
+        'dmOnly',
         'watchedUps', 'upCommentPerRound', 'upCommentPerDay', 'upSinceDays', 'scheduleSessionId',
         'blockedUps',
         'personaFile',
