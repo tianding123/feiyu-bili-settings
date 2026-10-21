@@ -68,6 +68,38 @@ def _load_seen_bvs():
     return set(re.findall(r"BV[0-9A-Za-z]{10}", text))
 
 
+def _load_blocked_ups():
+    """从 config.json 读「屏蔽的 UP 主」名单。
+
+    ⭐ 2026-10-22 加（用户要求）：搜索结果里作者对上这些人的，直接跳过这条视频。
+    返回 ({mids}, {names}) —— 有 uid 就按 uid 比（准），没 uid 退化到按名字比。
+    """
+    try:
+        cfg = load_cfg()
+    except Exception:
+        return set(), set()
+    ups = cfg.get("blockedUps")
+    if not isinstance(ups, list):
+        return set(), set()
+    mids = set()
+    names = set()
+    for u in ups:
+        if isinstance(u, dict):
+            n = str(u.get("name") or "").strip()
+            try:
+                m = int(u.get("uid") or u.get("mid") or 0)
+            except (TypeError, ValueError):
+                m = 0
+        else:
+            n = str(u or "").strip()
+            m = 0
+        if m > 0:
+            mids.add(m)
+        elif n:
+            names.add(n)
+    return mids, names
+
+
 def _cfg_file():
     """配置优先读家目录那份（设置页「刷B站」写的就是它），没有才退回脚本目录这份。"""
     try:
@@ -200,6 +232,23 @@ async def cmd_search(args):
             data["seenSkipped"] = len(data["videos"]) - len(kept)
             data["seenTotal"] = len(seen)
             data["videos"] = kept
+
+    # ⭐ 2026-10-22（用户要求）：屏蔽的 UP 主 —— 作者对上就直接跳过这条视频
+    blk_mids, blk_names = _load_blocked_ups()
+    if blk_mids or blk_names:
+        kept = []
+        for v in data["videos"]:
+            try:
+                vmid = int(v.get("mid") or 0)
+            except (TypeError, ValueError):
+                vmid = 0
+            author = str(v.get("author") or "").strip()
+            if (vmid > 0 and vmid in blk_mids) or (author and author in blk_names):
+                continue
+            kept.append(v)
+        data["blockedSkipped"] = len(data["videos"]) - len(kept)
+        data["blockedTotal"] = len(blk_mids) + len(blk_names)
+        data["videos"] = kept
 
     if min_play > 0:
         data["videos"] = [v for v in data["videos"] if int(v.get("play") or 0) >= min_play]
