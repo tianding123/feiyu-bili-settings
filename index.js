@@ -53,6 +53,74 @@ const PY_EXE = join(BILI_DIR, '.venv', 'Scripts', process.platform === 'win32' ?
 const UV_EXE = join(BILI_DIR, 'bin', process.platform === 'win32' ? 'uv.exe' : 'uv')
 const MIRROR = 'https://pypi.tuna.tsinghua.edu.cn/simple'
 
+// ── 更新检查（2026-10-22 加）─────────────────────────────────────────────
+// 起因：用户问「我更新以后，能不能给所有下载安装的人推送更新提示」。
+// 推送做不到（插件装在各自电脑，没有中心通道），但可以「主动检查 + 设置页提示」。
+const REPO = 'tianding123/feiyu-bili-settings'
+const UPDATE_API = `https://api.github.com/repos/${REPO}/releases/latest`
+const UPDATE_PAGE = `https://github.com/${REPO}/releases`
+
+/** 读本包版本 */
+function currentVersion() {
+  try {
+    const pkg = JSON.parse(readFileSync(join(PKG_DIR, 'package.json'), 'utf8'))
+    return String(pkg.version || '0.0.0')
+  } catch {
+    return '0.0.0'
+  }
+}
+
+/** 版本比较：a>b→1，相等→0，a<b→-1（忽略前缀 v） */
+function cmpVersion(a, b) {
+  const pa = String(a).replace(/^v/i, '').split('.').map((x) => parseInt(x, 10) || 0)
+  const pb = String(b).replace(/^v/i, '').split('.').map((x) => parseInt(x, 10) || 0)
+  const n = Math.max(pa.length, pb.length)
+  for (let i = 0; i < n; i += 1) {
+    const x = pa[i] || 0
+    const y = pb[i] || 0
+    if (x > y) return 1
+    if (x < y) return -1
+  }
+  return 0
+}
+
+/**
+ * 查 GitHub 最新 release。
+ * ⚠️ 必须带超时：国内 GitHub API 常常「端口通但数据不来」，
+ *    不设超时会一直挂着（uvfetch 就是这么踩的坑）。
+ * 查不到就静默返回 ok:false，绝不打扰用户。
+ */
+async function checkUpdate() {
+  const current = currentVersion()
+  const ctrl = new AbortController()
+  const timer = setTimeout(() => ctrl.abort(), 5000)
+  try {
+    const r = await fetch(UPDATE_API, {
+      headers: {
+        'User-Agent': 'feiyu-bili-settings/' + current,
+        Accept: 'application/vnd.github+json',
+      },
+      signal: ctrl.signal,
+    })
+    clearTimeout(timer)
+    if (!r.ok) return { ok: false, current, error: 'HTTP ' + r.status }
+    const j = await r.json()
+    const latest = String(j.tag_name || '').replace(/^v/i, '')
+    const hasUpdate = !!latest && cmpVersion(latest, current) > 0
+    return {
+      ok: true,
+      current,
+      latest,
+      hasUpdate,
+      url: j.html_url || UPDATE_PAGE,
+      page: UPDATE_PAGE,
+    }
+  } catch (e) {
+    clearTimeout(timer)
+    return { ok: false, current, error: String((e && e.message) || e) }
+  }
+}
+
 /** 把包里的 vendor 铺到家目录（只在目标不存在时铺，不覆盖用户已有的） */
 function ensureHomeFiles() {
   try {
@@ -109,7 +177,7 @@ function run(cmd, args, opts = {}) {
 }
 
 // ── 安装进度（内存里保留最近若干行，给设置页那个小框看） ──
-const PROGRESS = { env: [], asr: [] }
+const PROGRESS = { env: [], asr: [], update: [] }
 
 function pushProgress(kind, text) {
   const arr = PROGRESS[kind]
@@ -154,6 +222,108 @@ function runLive(cmd, args, opts, kind) {
 }
 
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36'
+
+// ── 自动更新（2026-10-22 加）─────────────────────────────────────────────
+// 用户要求：点「更新」就真装，别只打开网页；并且要有进度小窗口。
+// 实现：DSH 自带 node + pnpm（在 resources/runtime 下），从 GitHub 重装本包。
+
+/** DSH 自带的 node / pnpm 路径（换目录也能自己找） */
+function runtimeToolchain() {
+  try {
+    const appDir = dirname(process.execPath)
+    const rt = join(appDir, 'resources', 'runtime')
+    const nodeExe = join(
+      rt,
+      'primary-runtime',
+      'dependencies',
+      'node',
+      'bin',
+      process.platform === 'win32' ? 'node.exe' : 'node',
+    )
+    const pnpmCjs = join(rt, 'pnpm', 'bin', 'pnpm.cjs')
+    return { node: nodeExe, pnpm: pnpmCjs, ok: existsSync(nodeExe) && existsSync(pnpmCjs) }
+  } catch {
+    return { node: '', pnpm: '', ok: false }
+  }
+}
+
+/** profile 目录：插件在 <profile>/node_modules/<包名>，往上两层 */
+function profileRoot() {
+  try {
+    return dirname(dirname(PKG_DIR))
+  } catch {
+    return ''
+  }
+}
+
+let updateBusy = false
+
+/**
+ * 真正执行更新：pnpm add github:<repo>
+ * 进度推到 PROGRESS.update，前端靠 /update/progress 轮询显示。
+ */
+async function applyUpdate() {
+  if (updateBusy) return { ok: false, error: '上一次更新还没跑完，别点两次' }
+
+  const tc = runtimeToolchain()
+  if (!tc.ok) {
+    return {
+      ok: false,
+      error: '找不到 DSH 自带的 node/pnpm（在安装目录 resources/runtime 下），没法自动更新',
+    }
+  }
+
+  const cwd = profileRoot()
+  if (!cwd || !existsSync(cwd)) {
+    return { ok: false, error: '找不到 profile 目录，没法自动更新' }
+  }
+
+  updateBusy = true
+  PROGRESS.update.length = 0
+  const started = Date.now()
+
+  try {
+    const spec = `github:${REPO}`
+    pushProgress('update', `从 GitHub 拉最新版：${REPO}`)
+    pushProgress('update', '国内网络下可能要等一会儿；GitHub 直连失败会自动重试')
+
+    const res = await runLive(
+      tc.node,
+      [tc.pnpm, 'add', spec],
+      { cwd, timeout: 300000 },
+      'update',
+    )
+
+    const secs = Math.round((Date.now() - started) / 1000)
+
+    if (res.code === 0) {
+      pushProgress('update', `✓ 更新完成（用了 ${secs} 秒）`)
+      pushProgress('update', '⚠️ 需要重启 DSH 才会加载新版')
+      return { ok: true, restart: true, seconds: secs }
+    }
+
+    // 失败时给个人能看懂的原因
+    const blob = `${res.err || ''}\n${res.out || ''}`.toLowerCase()
+    let hint = `pnpm 退出码 ${res.code}`
+    if (/could not connect|etimedout|econnreset|network|connect.*failed/.test(blob)) {
+      hint = 'GitHub 连不上（网络问题）。可以开 VPN 后重试，或者手动下载 tgz 安装。'
+    } else if (/eacces|permission/.test(blob)) {
+      hint = '没有写权限（可能被安全软件拦了）。'
+    } else if (/404|not found/.test(blob)) {
+      hint = '仓库地址错了，或者仓库被删了。'
+    } else if (secs >= 250) {
+      hint = '超时了（网速太慢）。'
+    }
+    pushProgress('update', `✗ 更新失败：${hint}`)
+    return { ok: false, error: hint, seconds: secs }
+  } catch (e) {
+    const msg = String((e && e.message) || e)
+    pushProgress('update', `✗ 更新异常：${msg}`)
+    return { ok: false, error: msg }
+  } finally {
+    updateBusy = false
+  }
+}
 
 /**
  * 建 venv —— Python 版本逐级降级：3.12 → 3.11 → 3.10。
@@ -262,6 +432,25 @@ export function apply(ctx) {
 
   async function handle(req, res, url) {
     const path = url.pathname.replace(/^\/api\/feiyu-bili/, '') || '/'
+
+    // ── 更新检查（设置页打开时调一次；手动点「检查更新」也走这里）──
+    if (req.method === 'GET' && path === '/update/check') {
+      const r = await checkUpdate().catch((e) => ({
+        ok: false,
+        current: currentVersion(),
+        error: String((e && e.message) || e),
+      }))
+      return send(res, 200, r)
+    }
+
+    // ── 真正执行更新（点「更新」按钮走这里）──
+    if (req.method === 'POST' && path === '/update/apply') {
+      const r = await applyUpdate().catch((e) => ({
+        ok: false,
+        error: String((e && e.message) || e),
+      }))
+      return send(res, 200, r)
+    }
 
     if (req.method === 'GET' && path === '/config') {
       const scheduleOk = !!ctx.get('schedule')
@@ -553,8 +742,11 @@ export function apply(ctx) {
     }
 
     // ── 安装进度（最近 3 行） ──
-    if (req.method === 'GET' && (path === '/env/progress' || path === '/asr/progress')) {
-      const kind = path.startsWith('/env') ? 'env' : 'asr'
+    if (
+      req.method === 'GET' &&
+      (path === '/env/progress' || path === '/asr/progress' || path === '/update/progress')
+    ) {
+      const kind = path.startsWith('/env') ? 'env' : path.startsWith('/asr') ? 'asr' : 'update'
       const all = PROGRESS[kind]
       return send(res, 200, { ok: true, lines: all.slice(-3), total: all.length })
     }
