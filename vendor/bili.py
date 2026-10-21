@@ -68,22 +68,31 @@ def _load_seen_bvs():
     return set(re.findall(r"BV[0-9A-Za-z]{10}", text))
 
 
-def _load_blocked_ups():
+async def _load_blocked_ups():
     """从 config.json 读「屏蔽的 UP 主」名单。
 
     ⭐ 2026-10-22 加（用户要求）：搜索结果里作者对上这些人的，直接跳过这条视频。
-    返回 ({mids}, {names}) —— 有 uid 就按 uid 比（准），没 uid 退化到按名字比。
+    返回 ({mids}, {names}) —— 有 uid 就按 uid 比（准），没 uid 才退化到按名字比。
+
+    ⭐ 2026-10-22 补（用户指出「改昵称会失效」）：跟「特别关注」一个待遇 ——
+       只填了昵称、没填 uid 的，这里**当场解析一次 uid 并写回 config**，
+       以后就按 uid 比，他改昵称也不影响。
     """
     try:
-        cfg = load_cfg()
+        cfg_path = _cfg_file()
+        raw = json.loads(cfg_path.read_text(encoding="utf-8"))
     except Exception:
         return set(), set()
-    ups = cfg.get("blockedUps")
-    if not isinstance(ups, list):
+
+    ups = raw.get("blockedUps")
+    if not isinstance(ups, list) or not ups:
         return set(), set()
+
+    changed = False
     mids = set()
     names = set()
-    for u in ups:
+
+    for i, u in enumerate(ups):
         if isinstance(u, dict):
             n = str(u.get("name") or "").strip()
             try:
@@ -93,10 +102,35 @@ def _load_blocked_ups():
         else:
             n = str(u or "").strip()
             m = 0
+
+        # 有昵称、没 uid → 解析一次（只在这一种情况下才碰网络）
+        if n and m <= 0:
+            try:
+                cred = core.load_credential()
+                found = await resolve_uid(cred, n) if cred else None
+            except Exception:
+                found = None
+            if found and found.get("uid"):
+                m = int(found["uid"])
+                new_name = str(found.get("name") or n).strip() or n
+                ups[i] = {"name": new_name, "uid": m}
+                changed = True
+
         if m > 0:
             mids.add(m)
         elif n:
             names.add(n)
+
+    if changed:
+        try:
+            raw["blockedUps"] = ups
+            cfg_path.write_text(
+                json.dumps(raw, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+        except Exception:
+            pass
+
     return mids, names
 
 
@@ -234,7 +268,7 @@ async def cmd_search(args):
             data["videos"] = kept
 
     # ⭐ 2026-10-22（用户要求）：屏蔽的 UP 主 —— 作者对上就直接跳过这条视频
-    blk_mids, blk_names = _load_blocked_ups()
+    blk_mids, blk_names = await _load_blocked_ups()
     if blk_mids or blk_names:
         kept = []
         for v in data["videos"]:
