@@ -29,6 +29,7 @@ import asyncio
 import base64
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -48,7 +49,23 @@ import mcp_server as core  # noqa: E402
 CFG_FILE = BASE / "config.json"
 HOME_CFG_FILE = Path.home() / ".dsh" / "bili-duty" / "config.json"
 STATE_FILE = BASE / "state.json"
+SEEN_FILE = BASE / "seen.md"
 OUT_DIR = BASE / "out"
+
+
+def _load_seen_bvs():
+    """从 seen.md 里提取所有【看过】的 BV 号。
+
+    ⭐ 2026-10-22 加（用户要求）：发现重复的就直接不看这条视频 ——
+       不读字幕、不写报告、不发评论。以前只是 SKILL.md 里写「读 seen.md 判重」，
+       靠模型自觉；现在在 search 这一层硬拦。
+    ⚠️ 用正则扫整个文件，不依赖表格格式（本机和云端的表格式曾经不一样）。
+    """
+    try:
+        text = SEEN_FILE.read_text(encoding="utf-8", errors="replace")
+    except Exception:
+        return set()
+    return set(re.findall(r"BV[0-9A-Za-z]{10}", text))
 
 
 def _cfg_file():
@@ -156,7 +173,10 @@ async def cmd_search(args):
 
     min_play = int(getattr(args, "min_play", 0) or 0)
     since_days = int(getattr(args, "since_days", 0) or 0)
-    if min_play <= 0 and since_days <= 0:
+    keep_seen = bool(getattr(args, "keep_seen", False))
+
+    # 三个过滤都没开 → 原样返回
+    if min_play <= 0 and since_days <= 0 and keep_seen:
         emit(raw)
         return
 
@@ -170,6 +190,16 @@ async def cmd_search(args):
         return
 
     before = len(data["videos"])
+
+    # ⭐ 2026-10-22（用户要求）：看过的视频直接跳过 —— 不读字幕、不写报告、不发评论。
+    #    以前只在 SKILL.md 里叫模型自己比对 seen.md，靠自觉；这里改成硬拦。
+    if not keep_seen:
+        seen = _load_seen_bvs()
+        if seen:
+            kept = [v for v in data["videos"] if str(v.get("bvid") or "") not in seen]
+            data["seenSkipped"] = len(data["videos"]) - len(kept)
+            data["seenTotal"] = len(seen)
+            data["videos"] = kept
 
     if min_play > 0:
         data["videos"] = [v for v in data["videos"] if int(v.get("play") or 0) >= min_play]
@@ -524,6 +554,8 @@ def main() -> int:
                    help="只要播放量 >= 这个数的（0=不限）。关键词轮默认传 50000")
     p.add_argument("--since-days", type=int, default=3,
                    help="只看最近几天的（0=不限）。默认 3，跟 config.json 的 searchDays 对齐")
+    p.add_argument("--keep-seen", action="store_true",
+                   help="保留看过的视频（默认会按 seen.md 排除掉，调试时才用）")
     p.set_defaults(func=cmd_search)
 
     p = sub.add_parser("subtitle", help="取 AI 字幕全文")
