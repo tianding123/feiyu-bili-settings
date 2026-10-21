@@ -262,6 +262,8 @@ async def bili_search(keyword: str, num: int = 10, order: str = "totalrank") -> 
             "aid": item.get("aid", 0),
             "title": title,
             "author": item.get("author", ""),
+            # ⭐ 2026-10-22 加：UP 主的 uid，屏蔽名单靠它比（按名字比会误伤同名）
+            "mid": item.get("mid", 0),
             "play": item.get("play", 0),
             "review": item.get("review", 0),
             "danmaku": item.get("video_review", 0),
