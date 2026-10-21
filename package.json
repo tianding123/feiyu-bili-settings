@@ -1,6 +1,6 @@
 {
   "name": "feiyu-bili-settings",
-  "version": "0.4.12",
+  "version": "0.4.13",
   "description": "DSH 设置页里的「刷B站」子页面 —— 改关键词、播放量门槛、每轮挑几条、UP 主名单、@ 谁，直接写进 bili-duty 的 config.json",
   "keywords": [
     "dsh",
