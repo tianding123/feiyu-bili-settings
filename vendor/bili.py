@@ -358,6 +358,92 @@ async def cmd_reply(args):
     return 1
 
 
+async def cmd_dm(args):
+    """发 B站私信（⭐ 开头自动带视频的 BV 号 —— 用户 2026-10-22 明确要求）。
+
+    走 bilibili_api.session.send_msg，接口是 api.vc.bilibili.com/web_im/v1/web_im/send_msg。
+    """
+    cfg = load_cfg()
+    if not cfg.get("dmOnly"):
+        emit({
+            "ok": False,
+            "blocked": True,
+            "hint": "私信模式没开：设置 → 刷B站 → 呼叫主人 → 打开「仅私信不评论」",
+        })
+        return 2
+
+    bvid = str(getattr(args, "bvid", "") or "").strip()
+    if not bvid:
+        emit({"ok": False, "error": "必须给 bvid —— 私信开头要带视频的 BV 号"})
+        return 2
+
+    # 收件人：--uid 优先；没有就按 config 里的 mentionName 解析
+    to_uid = int(getattr(args, "uid", 0) or 0)
+    if to_uid <= 0:
+        who = str(cfg.get("mentionName") or "").strip()
+        if not who:
+            emit({"ok": False, "error": "没填收件人：config 里 mentionName 是空的，也没传 --uid"})
+            return 2
+        try:
+            cred0 = core.load_credential()
+            found = await resolve_uid(cred0, who) if cred0 else None
+        except Exception:
+            found = None
+        if not found or not found.get("uid"):
+            emit({
+                "ok": False,
+                "error": "按昵称「%s」查不到 uid，请用 --uid 直接指定" % who,
+            })
+            return 2
+        to_uid = int(found["uid"])
+
+    # 正文：开头必须是 BV 号（只加一次，避免重复）
+    body = str(args.text or "").strip()
+    if not body:
+        emit({"ok": False, "error": "正文是空的"})
+        return 2
+    if not body.startswith(bvid):
+        body = "%s %s" % (bvid, body)
+
+    try:
+        from bilibili_api.session import send_msg, EventType as SessionEventType
+    except Exception as e:
+        emit({"ok": False, "error": "当前 bilibili_api 版本没有 send_msg：%s" % e})
+        return 2
+
+    cred = core.load_credential()
+    if not cred:
+        emit({"ok": False, "error": "未登录"})
+        return 4
+
+    try:
+        res = await send_msg(cred, to_uid, SessionEventType.TEXT, body)
+    except Exception as e:
+        emit({"ok": False, "to": to_uid, "bvid": bvid, "error": "发送异常：%s" % e})
+        return 1
+
+    code = (res or {}).get("code")
+    if code == 0:
+        emit({
+            "ok": True,
+            "to": to_uid,
+            "bvid": bvid,
+            "message": "私信已发送",
+            "preview": body[:80],
+        })
+        return 0
+
+    emit({
+        "ok": False,
+        "to": to_uid,
+        "bvid": bvid,
+        "code": code,
+        "error": (res or {}).get("message") or res,
+        "hint": "常见原因：对方设了「只收关注者的私信」/ 被拉黑 / 发太频繁被风控。",
+    })
+    return 1
+
+
 async def cmd_login(args):
     first = json.loads(await core.bili_login())
     if first.get("status") == "already_logged_in":
@@ -666,6 +752,13 @@ def main() -> int:
     p.add_argument("--root", type=int, default=0)
     p.add_argument("--force", action="store_true", help="本人当场让你发的")
     p.set_defaults(func=cmd_reply)
+
+    p = sub.add_parser("dm", help="发 B站私信（开头自动带 BV 号）")
+    p.add_argument("bvid", help="视频 BV 号（会原样放在私信开头）")
+    p.add_argument("text", help="正文（BV 号会自动加在最前面）")
+    p.add_argument("--uid", type=int, default=0,
+                   help="收件人 uid；不填就用 config.json 的 mentionName 解析")
+    p.set_defaults(func=cmd_dm)
 
     p = sub.add_parser("login", help="扫码登录（阻塞轮询）")
     p.add_argument("--timeout", type=int, default=180)
