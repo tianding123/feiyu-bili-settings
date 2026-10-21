@@ -151,12 +151,21 @@ window.__ModuleLoader__.load({
       const [scheduleHint, setScheduleHint] = React.useState('')
       const [envLines, setEnvLines] = React.useState([])
       const [asrLines, setAsrLines] = React.useState([])
+      // ── 更新检查（2026-10-22）──
+      const [updateInfo, setUpdateInfo] = React.useState(null)
+      const [updateChecking, setUpdateChecking] = React.useState(false)
+      // ── 更新执行（2026-10-22）──
+      const [updateLines, setUpdateLines] = React.useState([])
+      const [updateBusy, setUpdateBusy] = React.useState(false)
+      const [updateResult, setUpdateResult] = React.useState(null)
+      const updatePollRef = React.useRef(null)
       const envPollRef = React.useRef(null)
       const asrPollRef = React.useRef(null)
 
       React.useEffect(() => () => {
         if (envPollRef.current) clearInterval(envPollRef.current)
         if (asrPollRef.current) clearInterval(asrPollRef.current)
+        if (updatePollRef.current) clearInterval(updatePollRef.current)
       }, [])
 
       const startPoll = (kind) => {
@@ -251,6 +260,68 @@ window.__ModuleLoader__.load({
 
       const refreshWho = () => {
         jget('/whoami').then((r) => setWho(r)).catch(() => {})
+      }
+
+      // ── 更新检查（2026-10-22）──
+      //   打开设置页时自动查一次；也可以手动点「检查更新」重查。
+      //   查不到（网络不通 / GitHub 被墙）就静默，不打扰用户。
+      const checkUpdateNow = () => {
+        setUpdateChecking(true)
+        jget('/update/check')
+          .then((r) => setUpdateInfo(r || { ok: false, error: '空响应' }))
+          .catch((e) => setUpdateInfo({ ok: false, error: String((e && e.message) || e) }))
+          .finally(() => setUpdateChecking(false))
+      }
+
+      // 只在第一次挂载时查一次（别每次重渲染都去打 GitHub）
+      const updateCheckedRef = React.useRef(false)
+      React.useEffect(() => {
+        if (updateCheckedRef.current) return
+        updateCheckedRef.current = true
+        checkUpdateNow()
+      }, [])
+
+      // ── 执行更新（点「更新」按钮走这里）──
+      //   跑的过程中每 1.5 秒拉一次进度，显示在下面的小框里（跟装依赖同一个形态）。
+      const startUpdatePoll = () => {
+        if (updatePollRef.current) clearInterval(updatePollRef.current)
+        updatePollRef.current = setInterval(async () => {
+          try {
+            const r = await jget('/update/progress')
+            if (r && r.ok) setUpdateLines(r.lines || [])
+          } catch {
+            /* 拉不到就下次再拉 */
+          }
+        }, 1500)
+      }
+
+      const doUpdate = async () => {
+        if (updateBusy) return
+        setUpdateBusy(true)
+        setUpdateResult(null)
+        setUpdateLines([])
+        startUpdatePoll()
+        try {
+          const r = await jpost('/update/apply', {})
+          if (r && r.ok) {
+            setUpdateResult({
+              type: 'ok',
+              text: r.restart
+                ? '✓ 更新完成 —— 重启 DSH 后生效'
+                : '✓ 更新完成',
+            })
+          } else {
+            setUpdateResult({ type: 'err', text: '✗ ' + ((r && r.error) || '更新失败') })
+          }
+        } catch (e) {
+          setUpdateResult({ type: 'err', text: '✗ ' + String((e && e.message) || e) })
+        }
+        if (updatePollRef.current) {
+          clearInterval(updatePollRef.current)
+          updatePollRef.current = null
+        }
+        setUpdateBusy(false)
+        checkUpdateNow()
       }
 
       const startLogin = async () => {
@@ -417,6 +488,123 @@ window.__ModuleLoader__.load({
           h('span', { style: { color: '#7ea6e0' } }, 'c1overzz（凌羽clover）'),
           ' 的 dsh-bili-scroll 魔改',
         ),
+
+        // ── 版本信息（一直显示）──
+        //   左：最新版本 / 本地版本 两行文字
+        //   右：更新按钮 —— 本地 < 最新 时可点，否则灰掉
+        (function renderVersion() {
+          const info = updateInfo || {}
+          const ok = info.ok === true
+          const known = ok && info.latest
+          const latest = known ? info.latest : (updateChecking ? '检查中…' : '查不到')
+          const current = info.current || '—'
+          // 只有「查到了最新版」且「本地确实更旧」才允许点
+          const canUpdate = known && info.hasUpdate === true
+          const failed = updateInfo && !ok
+
+          return h('div', {
+            style: {
+              margin: '0 0 12px',
+              padding: '10px 12px',
+              borderRadius: '7px',
+              background: 'rgba(255,255,255,.03)',
+              border: '1px solid rgba(255,255,255,.08)',
+              fontSize: '12px',
+              lineHeight: '1.7',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '12px',
+            },
+          },
+            // 左边两行
+            h('div', { style: { flex: 1, minWidth: 0 } },
+              h('div', {
+                style: {
+                  color: canUpdate ? '#ffc83c' : 'inherit',
+                  fontWeight: canUpdate ? '600' : '400',
+                },
+              }, `最新版本 ${latest}`),
+              h('div', {}, `本地版本 ${current}`),
+              failed
+                ? h('div', { style: { opacity: '.55', fontSize: '11px' } },
+                    `（检查失败：${info.error || '网络不通'}）`)
+                : null,
+            ),
+            // 右边按钮
+            h('button', {
+              disabled: !canUpdate || updateChecking || updateBusy,
+              onClick: () => {
+                if (!canUpdate || updateBusy) return
+                doUpdate()
+              },
+              style: {
+                flex: '0 0 auto',
+                padding: '5px 16px',
+                borderRadius: '6px',
+                fontSize: '12px',
+                cursor: canUpdate && !updateChecking && !updateBusy ? 'pointer' : 'not-allowed',
+                border: '1px solid ' + (canUpdate ? 'rgba(126,166,224,.7)' : 'rgba(255,255,255,.12)'),
+                background: canUpdate ? 'rgba(126,166,224,.18)' : 'transparent',
+                color: canUpdate ? '#7ea6e0' : 'rgba(255,255,255,.3)',
+                opacity: updateChecking || updateBusy ? '.5' : '1',
+              },
+              title: updateBusy
+                ? '正在更新…'
+                : canUpdate
+                  ? '从 GitHub 拉最新版并安装'
+                  : '已是最新，无需更新',
+            }, updateBusy ? '更新中…' : updateChecking ? '检查中' : '更新'),
+            // 重查（小按钮）
+            h('button', {
+              onClick: () => checkUpdateNow(),
+              disabled: updateChecking,
+              style: {
+                flex: '0 0 auto',
+                padding: '5px 10px',
+                borderRadius: '6px',
+                fontSize: '11px',
+                cursor: updateChecking ? 'not-allowed' : 'pointer',
+                border: '1px solid rgba(255,255,255,.12)',
+                background: 'transparent',
+                color: 'inherit',
+                opacity: '.6',
+              },
+              title: '重新检查一次',
+            }, '↻'),
+          )
+        })(),
+
+        // ── 更新执行进度（跟「装依赖」那个小框同一个形态）──
+        //   只有真的在跑 / 跑完了才出现，平时不占地方。
+        updateLines.length > 0 || updateResult
+          ? h('div', {
+              style: {
+                margin: '0 0 12px',
+                padding: '10px 12px',
+                borderRadius: '7px',
+                background: 'rgba(0,0,0,.25)',
+                border: '1px solid rgba(255,255,255,.08)',
+                fontFamily: 'ui-monospace, SFMono-Regular, Consolas, monospace',
+                fontSize: '11px',
+                lineHeight: '1.65',
+              },
+            },
+              updateResult
+                ? h('div', {
+                    style: {
+                      color: updateResult.type === 'ok' ? '#7fd47f' : '#ff8a80',
+                      marginBottom: '6px',
+                      fontWeight: '600',
+                    },
+                  }, updateResult.text)
+                : h('div', { style: { opacity: '.7', marginBottom: '6px' } }, '正在更新…'),
+              updateLines.slice(-6).map((ln, i) =>
+                h('div', {
+                  key: i,
+                  style: { opacity: '.75', wordBreak: 'break-all' },
+                }, ln)),
+            )
+          : null,
 
         // ── 测试跑一轮 ──
         h(Section, { title: '测试', lined: true },
