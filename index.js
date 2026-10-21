@@ -717,12 +717,20 @@ export function apply(ctx) {
           + `T${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
           + `${sign}${pad(Math.floor(Math.abs(off) / 60))}:${pad(Math.abs(off) % 60)}`
       }
+      const dmOnly = cfg.dmOnly === true
+      const autoComment = cfg.autoComment === true
+      let deliverLine = '其他全按 SKILL.md 的流程跑一轮（UP 主 + 关键词 + 写日报，**不发评论也不发私信**）。'
+      if (dmOnly) {
+        deliverLine = '⭐ 用户开的是【仅私信不评论】：递消息给主人用 `bili.py dm <BV号> "正文"`（BV 号会自动加在私信开头），**不要发公开评论**。其余按 SKILL.md 跑一轮（UP 主 + 关键词 + 日报）。'
+      } else if (autoComment) {
+        deliverLine = '其他全按 SKILL.md 的流程跑一轮（UP 主 + 关键词 + 发评论 + 日报）。'
+      }
       const prompt = [
         '刷B站 · 这是一次【手动测试】，用户刚在设置页点了「测试跑一轮」。',
         '',
         '先调用 skill { name: "bili-scroll" }，把 SKILL.md 读进来。',
         '⚠️ 这次是测试：**跳过「防重复」检查**（不读 runs 标记、也不写），**不占当天额度**。',
-        '其他全按 SKILL.md 的流程跑一轮（UP 主 + 关键词 + 发评论 + 日报）。',
+        deliverLine,
       ].join('\n').trim()
 
       // 先试 3 秒；万一服务器判定时间已过，无脑再往后挪 5 秒重试一次
@@ -955,6 +963,16 @@ export function apply(ctx) {
           '先调用 skill { name: "bili-scroll" }，把 SKILL.md 读进来，然后完全按它跑一轮。',
           `⚠️ 这是今天的**第 ${i + 1} 轮**，防重标记记作 \`runs["<今天>:r${i + 1}"]\`。`,
         ]
+          if (cfg.dmOnly === true) {
+            lines.push('')
+            lines.push('⭐ 用户开的是【仅私信不评论】：递消息给主人用 `bili.py dm <BV号> "正文"`，**不要发公开评论**。')
+          } else if (cfg.autoComment === true) {
+            lines.push('')
+            lines.push('⭐ 用户开的是【自动评论并 @ 我】：走 `bili.py reply` 发公开评论。')
+          } else {
+            lines.push('')
+            lines.push('⭐ 用户两个开关都关着：**不发评论也不发私信**，只写日报。')
+          }
         const personaFile = String(cfg.personaFile || '').trim()
         if (personaFile) {
           lines.push('')
