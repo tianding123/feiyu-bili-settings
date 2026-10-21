@@ -61,6 +61,11 @@ python bili.py ups                                         :: 看固定 UP 主�
 python bili.py up-feed --since-days <upSinceDays>          :: 查固定 UP 主有没有新视频
 ```
 
+⭐ **`search` 会自动排除 `seen.md` 里看过的视频**（2026-10-22 加）——
+返回里 `seenSkipped` = 剔掉几条、`seenTotal` = 表里总共多少条。
+**所以不用再手动比对 seen.md 了**，拿到的 `videos` 全是没看过的。
+想看全部（调试）加 `--keep-seen`。
+
 ## 播放量门槛（⭐ 用户 2026-10-19 定的规则，**数值以 config.json 为准**）
 
 - **关键词搜索：播放量 ≥ `minPlay`**（`config.json` 的 `minPlay` 字段）——搜的时候加 `--min-play <minPlay>`。
@@ -141,7 +146,7 @@ subagent {
    ⚠️ 而且**热门词的第一页覆盖范围很短**（「原神剧情」42 条只覆盖 5 小时），
       要真覆盖几天得翻页；现在没有翻页能力，所以窗口别设太小。
 2. 汇总所有关键词的结果，**跨关键词去重**（同一 BV 只算一次）
-3. 对照工作目录里的 seen.md 判重（BV 号出现过就跳过）
+3. ~~对照 seen.md 判重~~ → **已被 `search` 自动完成**（看 `seenSkipped` 就知道剔了几条），**这一步不用再做**
 4. 对每个候选跑 bili.py subtitle <BV号> 读原文；
    没字幕时看 config.json 的 `transcribe`：**`true` → 跑 `bili.py asr <BV号>` 本地转写**；`false` → 直接跳过
 5. 顺手 bili.py comments <BV号> --num 10 翻一眼评论区
@@ -208,7 +213,7 @@ subagent {
 
 1. 读 `config.json`：`perDay` / `keywords` / `searchDays` / `minPlay` / `autoComment` / `mentionName` / `transcribe`
 2. 每个关键词 `search`，`--order pubdate` 优先，挑**近 `searchDays` 天**
-3. 判重：读 `seen.md`，BV 号出现过的直接跳过
+3. ~~判重：读 seen.md~~ → **`search` 已经自动剔掉看过的**（看返回里的 `seenSkipped`），这里不用再做
 4. 逐条判断：先 `subtitle`；没字幕且 `transcribe=true` → `asr`；顺手 `comments`
 5. 写报告 `out/<今天>.md`：标题 / UP / 链接 / 播放量 / 为什么值得（两三句）/ 一句话；结尾总结
 6. 更新 `seen.md`（`日期 | BV | 标题 | 结论`）和 `state.json`（`day` / `count` / `lastRunAt` / `lastWhy`）
