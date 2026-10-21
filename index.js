@@ -57,7 +57,7 @@ const MIRROR = 'https://pypi.tuna.tsinghua.edu.cn/simple'
 function ensureHomeFiles() {
   try {
     mkdirSync(BILI_DIR, { recursive: true })
-    for (const f of ['bili.py', 'mcp_server.py', 'requirements.txt']) {
+    for (const f of ['bili.py', 'mcp_server.py', 'asr.py', 'requirements.txt']) {
       const to = join(BILI_DIR, f)
       const from = join(VENDOR_DIR, f)
       if (!existsSync(from)) continue
