@@ -129,6 +129,10 @@ window.__ModuleLoader__.load({
       const [ups, setUps] = React.useState([])
       const [upPick, setUpPick] = React.useState('')
       const [newUp, setNewUp] = React.useState({ name: '', uid: '' })
+      // ── 屏蔽的 UP 主（2026-10-22）──
+      const [blockedUps, setBlockedUps] = React.useState([])
+      const [blkPick, setBlkPick] = React.useState('')
+      const [newBlk, setNewBlk] = React.useState({ name: '', uid: '' })
       const [slots, setSlots] = React.useState([
         { start: '12:00', end: '14:00' },
         { start: '17:00', end: '19:00' },
@@ -394,6 +398,7 @@ window.__ModuleLoader__.load({
             setScheduleOk(r.scheduleAvailable !== false)
             setScheduleHint(r.scheduleHint || '')
             setUps(Array.isArray(c.watchedUps) ? c.watchedUps : [])
+            setBlockedUps(Array.isArray(c.blockedUps) ? c.blockedUps : [])
             if (Array.isArray(c.slots) && c.slots.length) {
               setSlots(c.slots.map((s) => ({ start: s.start || '12:00', end: s.end || '14:00' })))
             }
@@ -446,6 +451,7 @@ window.__ModuleLoader__.load({
             asrModel: String(cfg.asrModel || 'small'),
             personaFile: String(cfg.personaFile || '').trim(),
             watchedUps: ups.map((u) => ({ name: String(u.name || '').trim(), uid: Number(u.uid) || 0 })).filter((u) => u.name),
+            blockedUps: blockedUps.map((u) => ({ name: String(u.name || '').trim(), uid: Number(u.uid) || 0 })).filter((u) => u.name || u.uid),
             upCommentPerRound: Number(cfg.upCommentPerRound) || 0,
             upCommentPerDay: Number(cfg.upCommentPerDay) || 0,
             upSinceDays: Number(cfg.upSinceDays) || 3,
@@ -890,6 +896,66 @@ window.__ModuleLoader__.load({
           h('div', { 'data-fbs-note': '' }, 'uid 留 0 也行：开跑时会按昵称自动查一次并写回。'),
         ),
 
+        // ── 屏蔽的 UP 主（2026-10-22 加）──
+        h(Section, { title: '屏蔽的 UP 主', lined: true },
+          h('div', { 'data-fbs-note': '' },
+            '这些人做的视频，搜到了也直接跳过 —— 不读字幕、不写报告、不发评论。'),
+          h('div', { 'data-fbs-row': '' },
+            h('div', { 'data-fbs-grow': '' },
+              h('div', { 'data-fbs-label': '' }, '已屏蔽的 UP 主'),
+              h('div', { 'data-fbs-note': '' },
+                blockedUps.length ? `共 ${blockedUps.length} 个 —— 选一个点删除` : '还没有，下面添加'),
+            ),
+            h('select', {
+              'data-fbs-input': '',
+              value: blkPick,
+              onChange: (e) => setBlkPick(e.target.value),
+              style: { maxWidth: '200px' },
+              disabled: !blockedUps.length,
+            },
+              h('option', { value: '' }, blockedUps.length ? '（选一个）' : '（空）'),
+              ...blockedUps.map((u, i) => h('option', { key: `blk-${i}`, value: String(i) },
+                `${u.name || '(无名)'}${u.uid ? ` · ${u.uid}` : ''}`)),
+            ),
+            h('button', {
+              'data-fbs-btn': '', 'data-danger': '',
+              disabled: !blockedUps.length || blkPick === '',
+              onClick: () => {
+                const i = Number(blkPick)
+                if (Number.isInteger(i) && i >= 0 && i < blockedUps.length) {
+                  setBlockedUps(blockedUps.filter((_, j) => j !== i))
+                  setBlkPick('')
+                }
+              },
+            }, '删除'),
+          ),
+          h('div', { 'data-fbs-row': '' },
+            h('input', {
+              'data-fbs-input': '', type: 'text', placeholder: 'UP 主昵称',
+              value: newBlk.name,
+              onChange: (e) => setNewBlk({ ...newBlk, name: e.target.value }),
+            }),
+            h('input', {
+              'data-fbs-num': '', type: 'text', placeholder: 'uid（可留空）',
+              value: newBlk.uid,
+              onChange: (e) => setNewBlk({ ...newBlk, uid: e.target.value }),
+              style: { width: '130px' },
+            }),
+            h('button', {
+              'data-fbs-btn': '',
+              disabled: !newBlk.name.trim() && !newBlk.uid.trim(),
+              onClick: () => {
+                const name = newBlk.name.trim()
+                const uid = Number(newBlk.uid) || 0
+                if (!name && !uid) return
+                setBlockedUps([...blockedUps, { name, uid }])
+                setNewBlk({ name: '', uid: '' })
+              },
+            }, '添加'),
+          ),
+          h('div', { 'data-fbs-note': '' },
+            '填了 uid 就按 uid 比（最准，不怕改名）；没填 uid 才按昵称比。'),
+        ),
 
         // ── 评论 ──
         h(Section, { title: '发评论', lined: true },
