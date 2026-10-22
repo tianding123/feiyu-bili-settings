@@ -67,6 +67,11 @@ python bili.py up-feed --since-days <upSinceDays>          :: 查固定 UP 主�
 **所以不用再手动比对 seen.md 了**，拿到的 `videos` 全是没看过的。
 想看全部（调试）加 `--keep-seen`。
 
+⭐ **只认近 `searchDays` 天（2026-10-22 加）** —— 判重不再无限累积：
+搜索时会自动把超过 `searchDays` 天的旧记录删掉（`seen.md` 不会再越长越大），
+判重只看这个窗口内的。`searchDays` 就是设置页「查最近 X 天」那个值，改了它判重窗口跟着变。
+（UP 主轮不受影响 —— 它用独立的 `seen-up.json`，每个 UP 主最多记 200 条。）
+
 ## 投递方式（两种，互斥 —— 2026-10-22 加）
 
 **看 `config.json` 的两个开关，哪个是 `true` 就走哪条**（两个都 false 就只写日报）：
