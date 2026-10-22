@@ -282,6 +282,40 @@ asyncio.run(main())
 - 复核用上面的 `reply/main?mode=2`，按自己的 `uid` 找；
 - 老接口 `get_comments(order=TIME)` 只适合看"大致有什么评论"，**不能用来判断"我刚发的那条在不在"**。
 
+## 派子代理的正确姿势（2026-10-22 加，防瞎猜 API）
+
+**本插件不注册任何 `bili_*` 工具** —— 所有 B站 操作都走 `bili.py` 命令行（见上面「命令」那节）。
+没有 `bili_scan`、没有 `bili_run`、什么 `bili_xxx` 工具都没有。
+
+### 想并行刷？用 Agent 自己的工具
+
+- ✅ `subagent`（一次性子代理，跑完返回结果）
+- ✅ `subagent_fork`（继承当前对话上下文的子代理）
+- ✅ 互相独立的批次**一次性并发发出去**，别一个个等
+
+### 在宿主插件里写代码时，`ctx.subagents` 只有这些方法
+
+（DSH 0.2.0-rc.2 实测清单）
+
+```text
+resolveMaxDepth          startContinuable        sendMessage
+interrupt                drainContinuableDescendants
+drainContinuableChildren listChildren            listDescendants
+prompt                   interruptByParent       registerProvider
+getProvider              list                    start
+```
+
+### ❌ 不要调这些（不存在，调了就报 "不是函数"）
+
+```text
+ctx.subagents.startActivation(...)
+ctx.agents.startActivation(...)
+bili_scan(...)
+```
+
+**看到 `xxx is not a function` 这种报错，九成是猜了不存在的方法名 ——
+先回来查上面的清单，别硬试、别换个名字接着猜。**
+
 ## 红线
 
 - 不透露隐私（账号、机器路径、聊过的内容）一个字都不许进评论
