@@ -53,19 +53,76 @@ SEEN_FILE = BASE / "seen.md"
 OUT_DIR = BASE / "out"
 
 
-def _load_seen_bvs():
+def _load_seen_bvs(days: int = 0):
     """从 seen.md 里提取所有【看过】的 BV 号。
 
     ⭐ 2026-10-22 加（用户要求）：发现重复的就直接不看这条视频 ——
        不读字幕、不写报告、不发评论。以前只是 SKILL.md 里写「读 seen.md 判重」，
        靠模型自觉；现在在 search 这一层硬拦。
-    ⚠️ 用正则扫整个文件，不依赖表格格式（本机和云端的表格式曾经不一样）。
+    ⭐ 2026-10-22 再改（用户要求）：只认近 days 天的记录，days<=0 表示全认。
+       以前全文扫、永不清理 —— 文件只涨不跌，一个月前看过的也永久跳过。
+       「天数」直接绑 config.json 的 searchDays（UP 主轮不参与，它有独立配额）。
+    ⚠️ 用正则扫，不依赖表格格式（本机和云端的表格式曾经不一样）。
+    ⚠️ 没日期的行照样算进判重（多是说明/引用，影响很小）。
     """
     try:
         text = SEEN_FILE.read_text(encoding="utf-8", errors="replace")
     except Exception:
         return set()
-    return set(re.findall(r"BV[0-9A-Za-z]{10}", text))
+
+    if not days or days <= 0:
+        return set(re.findall(r"BV[0-9A-Za-z]{10}", text))
+
+    from datetime import date, timedelta
+    cutoff = (date.today() - timedelta(days=days)).isoformat()   # 例：2026-10-19
+
+    out = set()
+    for line in text.splitlines():
+        m = re.search(r"(20\d{2}-\d{2}-\d{2})", line)
+        if m:
+            # 有日期 → 只认近 days 天
+            if m.group(1) >= cutoff:
+                out |= set(re.findall(r"BV[0-9A-Za-z]{10}", line))
+        else:
+            # 没日期 → 无法判断，保守保留
+            out |= set(re.findall(r"BV[0-9A-Za-z]{10}", line))
+    return out
+
+
+def _trim_seen(days: int) -> int:
+    """删掉 seen.md 里超过 days 天的【带日期记录行】，返回删了几行。
+
+    ⭐ 2026-10-22 加（用户要求）：防止 seen.md 无限增长。
+    · 只动「- YYYY-MM-DD | ...」这种记录行
+    · 说明文字 / 命令 / 表头 / section 标题（## 2026-10-15）原样保留
+    · days<=0 时不动（关掉清理）
+    """
+    if not days or days <= 0:
+        return 0
+    try:
+        text = SEEN_FILE.read_text(encoding="utf-8", errors="replace")
+    except Exception:
+        return 0
+
+    from datetime import date, timedelta
+    cutoff = (date.today() - timedelta(days=days)).isoformat()
+
+    rec = re.compile(r"^\s*[-*]?\s*(\d{4}-\d{2}-\d{2})\s*\|")
+    kept = []
+    removed = 0
+    for line in text.split("\n"):
+        m = rec.match(line)
+        if m and m.group(1) < cutoff:
+            removed += 1
+            continue
+        kept.append(line)
+
+    if removed > 0:
+        try:
+            SEEN_FILE.write_text("\n".join(kept), encoding="utf-8")
+        except Exception:
+            return 0
+    return removed
 
 
 async def _load_blocked_ups():
@@ -241,6 +298,20 @@ async def cmd_search(args):
     since_days = int(getattr(args, "since_days", 0) or 0)
     keep_seen = bool(getattr(args, "keep_seen", False))
 
+    # ⭐ 2026-10-22（用户要求）：按 searchDays 清掉过龄记录，防止 seen.md 无限增长。
+    #    只在正常搜索时清（--keep-seen 是调试用的，不动文件）。
+    trim_days = 0
+    if not keep_seen:
+        try:
+            trim_days = int(load_cfg().get("searchDays") or 0)
+        except Exception:
+            trim_days = 0
+        if trim_days > 0:
+            try:
+                _trim_seen(trim_days)
+            except Exception:
+                pass
+
     # 三个过滤都没开 → 原样返回
     if min_play <= 0 and since_days <= 0 and keep_seen:
         emit(raw)
@@ -260,7 +331,7 @@ async def cmd_search(args):
     # ⭐ 2026-10-22（用户要求）：看过的视频直接跳过 —— 不读字幕、不写报告、不发评论。
     #    以前只在 SKILL.md 里叫模型自己比对 seen.md，靠自觉；这里改成硬拦。
     if not keep_seen:
-        seen = _load_seen_bvs()
+        seen = _load_seen_bvs(trim_days)
         if seen:
             kept = [v for v in data["videos"] if str(v.get("bvid") or "") not in seen]
             data["seenSkipped"] = len(data["videos"]) - len(kept)
