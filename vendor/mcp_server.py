@@ -295,6 +295,20 @@ async def bili_comments(bvid: str, num: int = 30) -> str:
     info = await v.get_info()
     aid = info["aid"]
 
+    # ⭐ 2026-10-25 加：作者身份 + 简介。
+    #   为什么：评论区里「别人的说法」可能是幻觉，作者本人的话才是可溯源的。
+    #   必须用 mid 认人 —— 昵称能改、能冒充，不可信。
+    owner = info.get("owner") or {}
+    author_mid = owner.get("mid")
+    # ⚠️ 类型陷阱（2026-10-25 实测）：`owner.mid` 是 int，
+    #    而评论里的 `member.mid` 是 str，直接 == 永远为 False。
+    #    统一转成字符串再比。
+    author_mid_s = str(author_mid) if author_mid is not None else None
+    author_name = owner.get("name", "") or ""
+    author_desc = (info.get("desc") or "").strip()
+    if len(author_desc) > 800:
+        author_desc = author_desc[:800] + "…"
+
     comments = []
     page = 1
     while len(comments) < num:
@@ -313,9 +327,15 @@ async def bili_comments(bvid: str, num: int = 30) -> str:
             for r in replies:
                 member = r.get("member", {})
                 content = r.get("content", {})
+                mid = member.get("mid")
+                mid_s = str(mid) if mid is not None else None
+                # 2026-10-25：由代码算好 is_author，别让模型自己比对（它会比错）
                 c = {
                     "rpid": r.get("rpid", 0),
                     "user": member.get("uname", ""),
+                    "user_mid": mid_s,
+                    "is_author": (author_mid_s is not None and mid_s == author_mid_s),
+                    "pinned": bool(r.get("top") or r.get("is_top")),
                     "content": content.get("message", ""),
                     "like": r.get("like", 0),
                     "reply_count": r.get("rcount", 0),
@@ -324,8 +344,12 @@ async def bili_comments(bvid: str, num: int = 30) -> str:
                 # 子评论
                 sub_replies = []
                 for sub in (r.get("replies") or [])[:2]:
+                    sub_mid = sub.get("member", {}).get("mid")
+                    sub_mid_s = str(sub_mid) if sub_mid is not None else None
                     sub_replies.append({
                         "user": sub.get("member", {}).get("uname", ""),
+                        "user_mid": sub_mid_s,
+                        "is_author": (author_mid_s is not None and sub_mid_s == author_mid_s),
                         "content": sub.get("content", {}).get("message", ""),
                         "like": sub.get("like", 0),
                     })
@@ -338,7 +362,18 @@ async def bili_comments(bvid: str, num: int = 30) -> str:
         except Exception as e:
             break
 
-    return json.dumps({"bvid": bvid, "count": len(comments[:num]), "comments": comments[:num]}, ensure_ascii=False)
+    # 2026-10-25：把作者信息和简介一起返回 —— 简介也是作者的自述，
+    # 判断「评论区说法 vs 作者说法」时要一起参与。
+    return json.dumps({
+        "bvid": bvid,
+        "author": {
+            "mid": author_mid,
+            "name": author_name,
+            "desc": author_desc,
+        },
+        "count": len(comments[:num]),
+        "comments": comments[:num],
+    }, ensure_ascii=False)
 
 
 # ========== Tool 3: 获取字幕 ==========
@@ -454,6 +489,8 @@ async def bili_video_info(bvid: str) -> str:
         "title": info.get("title"),
         "description": info.get("desc"),
         "author": info.get("owner", {}).get("name"),
+        # 2026-10-25 加：作者 UID。认作者只能靠 mid，昵称能改能冒充。
+        "author_mid": info.get("owner", {}).get("mid"),
         "duration": info.get("duration"),
         "pages": len(info.get("pages", [])),
         "tags": [t.get("tag_name") for t in info.get("tag", []) if t.get("tag_name")],
@@ -592,343 +629,6 @@ async def bili_crawl(keyword: str, max_videos: int = 5, comments_per_video: int 
 # ========== 辅助：封面处理 ==========
 
 import subprocess
-
-
-def _extract_cover_from_video(video_path: str) -> Picture:
-    """从视频第3秒截取一帧作为封面，返回 Picture 对象"""
-    tmp_cover = os.path.join(tempfile.gettempdir(), f"bili_cover_{os.getpid()}.png")
-    try:
-        subprocess.run(
-            ["ffmpeg", "-y", "-ss", "3", "-i", video_path,
-             "-vframes", "1", "-q:v", "2", tmp_cover],
-            capture_output=True, timeout=30,
-        )
-        if os.path.isfile(tmp_cover) and os.path.getsize(tmp_cover) > 0:
-            return Picture.from_file(tmp_cover)
-    finally:
-        if os.path.isfile(tmp_cover):
-            os.remove(tmp_cover)
-    # fallback: 第0秒
-    tmp_cover2 = os.path.join(tempfile.gettempdir(), f"bili_cover2_{os.getpid()}.png")
-    try:
-        subprocess.run(
-            ["ffmpeg", "-y", "-ss", "0", "-i", video_path,
-             "-vframes", "1", "-q:v", "2", tmp_cover2],
-            capture_output=True, timeout=30,
-        )
-        if os.path.isfile(tmp_cover2) and os.path.getsize(tmp_cover2) > 0:
-            return Picture.from_file(tmp_cover2)
-    finally:
-        if os.path.isfile(tmp_cover2):
-            os.remove(tmp_cover2)
-    raise RuntimeError(f"无法从视频截取封面: {video_path}")
-
-
-
-
-@mcp.tool()
-async def bili_send_dynamic(
-    text: str,
-    images: list[str] | None = None,
-    topic_id: int = 0,
-    schedule_time: int = 0,
-) -> str:
-    """
-    发布B站图文动态
-
-    Args:
-        text: 动态文本内容，支持@和表情（如 [doge]）
-        images: 图片列表，每项可以是本地文件路径或图片URL，最多9张。为空则发布纯文字动态
-        topic_id: 话题ID（可选，0表示不关联话题）
-        schedule_time: 定时发布的Unix时间戳（可选，0表示立即发布）
-
-    Returns:
-        发布结果，包含动态ID
-    """
-    if not text or not text.strip():
-        return json.dumps({"success": False, "error": "text 不能为空"}, ensure_ascii=False)
-
-    cred = get_cred()
-
-    dyn = dynamic.BuildDynamic.empty()
-    dyn.add_plain_text(text.strip())
-    # 上传图片
-    if images:
-        for img_path in images[:9]:
-            try:
-                if not img_path or not img_path.strip():
-                    continue
-                img_path = img_path.strip()
-                if img_path.startswith(("http://", "https://")):
-                    pic = await Picture.async_from_url(img_path)
-                else:
-                    if not os.path.isfile(img_path):
-                        return json.dumps({"success": False, "error": f"图片文件不存在: {img_path}"}, ensure_ascii=False)
-                    pic = Picture.from_file(img_path)
-                dyn.add_image(pic)
-            except Exception as e:
-                return json.dumps({"success": False, "error": f"图片处理失败: {img_path} - {str(e)}"}, ensure_ascii=False)
-
-    if topic_id:
-        dyn.set_topic(topic_id)
-
-    if schedule_time > 0:
-        dyn.set_send_time(schedule_time)
-
-    try:
-        result = await dynamic.send_dynamic(info=dyn, credential=cred)
-        return json.dumps({
-            "success": True,
-            "message": "动态发布成功",
-            "data": result if isinstance(result, dict) else str(result),
-        }, ensure_ascii=False)
-    except Exception as e:
-        return json.dumps({"success": False, "error": str(e)}, ensure_ascii=False)
-
-
-# ========== Tool 9: 上传视频 ==========
-
-@mcp.tool()
-async def bili_upload_video(
-    video_path: str,
-    title: str,
-    desc: str = "",
-    tid: int = 124,
-    tags: str = "AI",
-    cover_path: str = "",
-    source: str = "",
-    dynamic_text: str = "",
-    no_reprint: bool = True,
-) -> str:
-    """
-    上传视频到B站
-
-    Args:
-        video_path: 视频文件的本地路径
-        title: 视频标题（最多80字）
-        desc: 视频简介描述
-        tid: 分区ID，默认124（趣味科普人文-社科·法律·心理）。
-             常用分区：17=单机游戏 21=日常 95=数码 122=野生技术协会
-             124=社科 160=生活记录 171=电子竞技 183=影视杂谈
-             188=科技资讯 201=科学 207=财经商业 208=科技 209=手工
-             230=其他(生活) 231=美食 234=健身 32=完结动画
-        tags: 标签，逗号分隔，如"AI,教程,编程"（至少1个标签）
-        cover_path: 封面图片路径（可选，不填则B站自动截取）
-        source: 转载来源URL（非原创时必填）
-        dynamic_text: 粉丝动态文本（可选，投稿时同步发布的动态内容）
-        no_reprint: 是否启用未经作者授权禁止转载，默认True
-
-    Returns:
-        上传结果，包含BV号
-    """
-    # ---- 参数校验 ----
-    if not video_path or not video_path.strip():
-        return json.dumps({"success": False, "error": "video_path 不能为空，请提供视频文件的本地路径"}, ensure_ascii=False)
-
-    video_path = video_path.strip()
-    if not os.path.isfile(video_path):
-        return json.dumps({"success": False, "error": f"视频文件不存在: {video_path}"}, ensure_ascii=False)
-
-    if not title or not title.strip():
-        return json.dumps({"success": False, "error": "title 不能为空"}, ensure_ascii=False)
-
-    cred = get_cred()
-
-    try:
-        # 准备分P
-        page = VideoUploaderPage(
-            path=video_path,
-            title=title.strip()[:80],
-            description=(desc or "")[:250],
-        )
-
-        # 标签处理
-        tag_list = [t.strip() for t in (tags or "").split(",") if t.strip()]
-        if not tag_list:
-            tag_list = ["视频"]
-
-        # 判断原创/转载
-        is_original = not bool(source and source.strip())
-
-        # 封面：用户提供 > 自动从视频截取
-        if cover_path and cover_path.strip() and os.path.isfile(cover_path.strip()):
-            cover_pic = Picture.from_file(cover_path.strip())
-        else:
-            cover_pic = _extract_cover_from_video(video_path)
-
-        meta = VideoMeta(
-            tid=tid,
-            title=title.strip()[:80],
-            desc=desc or "",
-            cover=cover_pic,
-            tags=tag_list,
-            original=is_original,
-            source=source.strip() if source and source.strip() else None,
-            no_reprint=no_reprint if is_original else False,
-            dynamic=dynamic_text.strip() if dynamic_text and dynamic_text.strip() else None,
-        )
-
-        uploader = VideoUploader(
-            pages=[page],
-            meta=meta,
-            credential=cred,
-        )
-
-        # 上传事件回调（记录进度）
-        progress_info = {"phase": "初始化"}
-
-        @uploader.on("__ALL__")
-        async def on_event(data: dict):
-            progress_info["phase"] = str(data)
-
-        result = await uploader.start()
-        return json.dumps({
-            "success": True,
-            "message": "视频上传成功",
-            "data": result if isinstance(result, dict) else str(result),
-        }, ensure_ascii=False)
-    except Exception as e:
-        return json.dumps({
-            "success": False,
-            "error": str(e),
-            "last_phase": progress_info.get("phase", "unknown") if "progress_info" in dir() else "init",
-        }, ensure_ascii=False)
-
-
-# ========== Tool 10: 上传多P视频 ==========
-
-@mcp.tool()
-async def bili_upload_video_multi(
-    video_paths: list[str],
-    page_titles: list[str],
-    title: str,
-    desc: str = "",
-    tid: int = 124,
-    tags: str = "AI",
-    cover_path: str = "",
-    source: str = "",
-) -> str:
-    """
-    上传多P视频到B站（多个分P合并为一个投稿）
-
-    Args:
-        video_paths: 视频文件路径列表，如["/path/p1.mp4", "/path/p2.mp4"]
-        page_titles: 各分P标题列表，与video_paths一一对应
-        title: 视频总标题
-        desc: 视频简介
-        tid: 分区ID，默认124
-        tags: 标签，逗号分隔
-        cover_path: 封面图片路径（可选）
-        source: 转载来源URL（非原创时必填）
-
-    Returns:
-        上传结果
-    """
-    cred = get_cred()
-
-    if not video_paths:
-        return json.dumps({"success": False, "error": "video_paths 不能为空"}, ensure_ascii=False)
-    if not page_titles:
-        return json.dumps({"success": False, "error": "page_titles 不能为空"}, ensure_ascii=False)
-    if len(video_paths) != len(page_titles):
-        return json.dumps({"success": False, "error": "video_paths 和 page_titles 数量必须一致"}, ensure_ascii=False)
-
-    try:
-        pages = []
-        for i, vp in enumerate(video_paths):
-            vp = (vp or "").strip()
-            if not vp or not os.path.isfile(vp):
-                return json.dumps({"success": False, "error": f"文件不存在: {vp}"}, ensure_ascii=False)
-            pages.append(VideoUploaderPage(
-                path=vp,
-                title=(page_titles[i] or "").strip()[:80] or f"P{i+1}",
-                description="",
-            ))
-
-        tag_list = [t.strip() for t in (tags or "").split(",") if t.strip()] or ["视频"]
-        is_original = not bool(source and source.strip())
-
-        # 封面：用户提供 > 从第一个视频自动截取
-        if cover_path and cover_path.strip() and os.path.isfile(cover_path.strip()):
-            cover_pic = Picture.from_file(cover_path.strip())
-        else:
-            cover_pic = _extract_cover_from_video(pages[0].path)
-
-        meta = VideoMeta(
-            tid=tid,
-            title=(title or "").strip()[:80],
-            desc=desc or "",
-            cover=cover_pic,
-            tags=tag_list,
-            original=is_original,
-            source=source.strip() if source and source.strip() else None,
-        )
-
-        uploader = VideoUploader(pages=pages, meta=meta, credential=cred)
-
-        result = await uploader.start()
-        return json.dumps({
-            "success": True,
-            "message": f"多P视频上传成功（共{len(pages)}P）",
-            "data": result if isinstance(result, dict) else str(result),
-        }, ensure_ascii=False)
-    except Exception as e:
-        return json.dumps({"success": False, "error": str(e)}, ensure_ascii=False)
-
-
-# ========== Tool 11: 发布专栏文章 (Opus) ==========
-
-@mcp.tool()
-async def bili_send_opus(
-    title: str,
-    content: str,
-    images: list[str] | None = None,
-    category_id: int = 0,
-) -> str:
-    """
-    发布B站图文（Opus，新版专栏）
-
-    Args:
-        title: 文章标题
-        content: 文章正文内容（纯文本，段落用换行分隔）
-        images: 文章中插入的图片路径或URL列表（可选）
-        category_id: 分类ID（可选，0表示不指定）
-
-    Returns:
-        发布结果
-    """
-    cred = get_cred()
-
-    dyn = dynamic.BuildDynamic.empty()
-
-    # 专栏动态以纯文本+图片方式构建
-    # 标题作为第一行加粗
-    full_text = f"【{title}】\n\n{content}"
-    dyn.add_plain_text(full_text)
-
-    if images:
-        for img_path in images:
-            try:
-                if not img_path or not img_path.strip():
-                    continue
-                img_path = img_path.strip()
-                if img_path.startswith(("http://", "https://")):
-                    pic = await Picture.async_from_url(img_path)
-                else:
-                    pic = Picture.from_file(img_path)
-                dyn.add_image(pic)
-            except Exception as e:
-                pass  # 图片失败不阻断发布
-
-    try:
-        result = await dynamic.send_dynamic(info=dyn, credential=cred)
-        return json.dumps({
-            "success": True,
-            "message": "图文发布成功",
-            "data": result if isinstance(result, dict) else str(result),
-        }, ensure_ascii=False)
-    except Exception as e:
-        return json.dumps({"success": False, "error": str(e)}, ensure_ascii=False)
 
 
 # ========== Tool 12: 查询分区列表 ==========

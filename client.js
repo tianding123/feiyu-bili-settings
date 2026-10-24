@@ -94,6 +94,27 @@ window.__ModuleLoader__.load({
       )
     }
 
+    // ⭐ 2026-10-25 加：单选行（评论策略用）。
+    //    没有现成的 Radio 组件，就用「整行可点 + 选中标记」，
+    //    样式沿用 data-fbs-row / data-fbs-label / data-fbs-note。
+    function ChoiceRow({ label, note, active, onClick }) {
+      return h('div', {
+        'data-fbs-row': '',
+        style: { cursor: 'pointer', alignItems: 'flex-start' },
+        onClick,
+      },
+        h('div', { 'data-fbs-grow': '' },
+          h('div', {
+            'data-fbs-label': '',
+            // 2026-10-25：选中态用和开关同一个蓝 #3b82f6
+            style: active
+              ? { fontWeight: 700, color: '#3b82f6' }
+              : undefined,
+          }, (active ? '◉ ' : '○ ') + label),
+          note ? h('div', { 'data-fbs-note': '' }, note) : null),
+      )
+    }
+
     function NumField({ label, note, value, min, max, onChange }) {
       return h('div', { 'data-fbs-row': '' },
         h('div', { 'data-fbs-grow': '' },
@@ -415,6 +436,7 @@ window.__ModuleLoader__.load({
       }, [])
 
       const set = (k, v) => setCfg((c) => ({ ...(c || {}), [k]: v }))
+
 
       const setSlotCount = (n) => {
         const count = Math.max(1, Math.min(6, Number(n) || 1))
@@ -808,8 +830,8 @@ window.__ModuleLoader__.load({
             onChange: (v) => set('searchDays', v),
           }),
           h(NumField, {
-            label: '每轮挑几个并 @ 你',
-            note: '关键词轮每轮挑几条，每条单独发一条评论 @ 你',
+            label: '每轮挑几个并 私信主人/@主人',
+            note: '关键词轮每轮挑几条，每条单独发一条（选了「仅私信不评论」就发私信，否则发评论 @ 你）',
             value: cfg.commentPerRound, min: 0, max: 20,
             onChange: (v) => set('commentPerRound', v),
           }),
@@ -970,9 +992,36 @@ window.__ModuleLoader__.load({
               if (v) set('dmOnly', false)
             },
           }),
+
+          // ⭐ 2026-10-25 加：评论策略（只在「自动评论」开着时才有意义）
+          //    「仅私信不评论」模式下完全不看这里 —— 那时根本不在评论区说话。
+          cfg.autoComment ? h('div', {
+            'data-fbs-sec': '',
+            style: { paddingLeft: 12, borderLeft: '2px solid var(--dsw-alias-border-subtle,#3a3f45)' },
+          },
+            h('div', { 'data-fbs-label': '' }, '遇到争议视频时'),
+            h(ChoiceRow, {
+              label: '作者优先（推荐）',
+              note: '读评论区，但如果评论和作者的说法冲突，只转述作者原话、不评价争议',
+              active: (cfg.commentPolicy || 'author-first') === 'author-first',
+              onClick: () => set('commentPolicy', 'author-first'),
+            }),
+            h(ChoiceRow, {
+              label: '只评视频内容',
+              note: '不读评论区，只根据视频本身总结 —— 最保守，不会被评论区带偏',
+              active: cfg.commentPolicy === 'content-only',
+              onClick: () => set('commentPolicy', 'content-only'),
+            }),
+            h(ChoiceRow, {
+              label: '不发表评论只私信给主人',
+              note: '读评论区，但是这条视频不发表评论，直接私信给主人',
+              active: cfg.commentPolicy === 'dm-only',
+              onClick: () => set('commentPolicy', 'dm-only'),
+            }),
+          ) : null,
           h(Toggle, {
             label: '仅私信不评论',
-            note: '不走评论区，直接发 B站 私信给你（用上面「要 @ 谁」那个账号，需要能查到 uid）',
+            note: '⚠️ 短时间内大量私信可能触发 B站 风控。',
             value: !!cfg.dmOnly,
             onChange: (v) => {
               set('dmOnly', v)
@@ -1077,6 +1126,8 @@ window.__ModuleLoader__.load({
             : null,
           ),
         ),
+
+
 
         // ── 保存 ──
         h('div', { 'data-fbs-row': '' },

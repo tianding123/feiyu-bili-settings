@@ -28,6 +28,7 @@ const HOME_DIR = join(DSH_HOME, 'bili-duty')
 const CFG_FILE = join(HOME_DIR, 'config.json')
 const STATE_FILE = join(HOME_DIR, 'state.json')
 
+
 /** 被归档的会话 id（workspace 服务把归档列表存在这里） */
 function archivedSessionIds() {
   try {
@@ -49,7 +50,11 @@ function archivedSessionIds() {
 const BILI_DIR = HOME_DIR
 const CRED_FILE = join(BILI_DIR, 'bili_credential.json')
 const REQ_FILE = join(BILI_DIR, 'requirements.txt')
-const PY_EXE = join(BILI_DIR, '.venv', 'Scripts', process.platform === 'win32' ? 'python.exe' : 'python')
+// 2026-10-24 修：venv 的 bin 目录名是平台相关的 —— Windows 是 Scripts/，
+// Linux/macOS 是 bin/。原来这里把 'Scripts' 写死了，导致云上（Linux）
+// 建完 venv 之后插件仍按 .venv/Scripts/python 去找，永远找不到。
+const VENV_BIN = process.platform === 'win32' ? 'Scripts' : 'bin'
+const PY_EXE = join(BILI_DIR, '.venv', VENV_BIN, process.platform === 'win32' ? 'python.exe' : 'python')
 const UV_EXE = join(BILI_DIR, 'bin', process.platform === 'win32' ? 'uv.exe' : 'uv')
 const MIRROR = 'https://pypi.tuna.tsinghua.edu.cn/simple'
 
@@ -479,6 +484,8 @@ export function apply(ctx) {
         'autoRun', 'slots', 'keywords', 'minPlay', 'perDay', 'commentPerRound', 'searchDays',
         'autoComment', 'mentionName', 'transcribe', 'asrModel',
         'dmOnly',
+        // ⭐ 2026-10-25：评论策略（author-first / content-only），只在 autoComment 开着时生效
+        'commentPolicy',
         'watchedUps', 'upCommentPerRound', 'upCommentPerDay', 'upSinceDays', 'scheduleSessionId',
         'blockedUps',
         'personaFile',
@@ -556,7 +563,7 @@ export function apply(ctx) {
 
     // ── 转写环境检查 ──
     if (req.method === 'GET' && path === '/asr/check') {
-      const py = join(BILI_DIR, '.venv-asr', 'Scripts', process.platform === 'win32' ? 'python.exe' : 'python')
+      const py = join(BILI_DIR, '.venv-asr', VENV_BIN, process.platform === 'win32' ? 'python.exe' : 'python')
       const pyOk = existsSync(py)
       let depsOk = false
       let detail = ''
@@ -583,7 +590,7 @@ export function apply(ctx) {
         pushProgress('asr', '✗ 找不到 uv —— 先点上面的「装主依赖」')
         return send(res, 200, { ok: false, error: `找不到 uv：${UV_EXE}` })
       }
-      const asrPy = join(BILI_DIR, '.venv-asr', 'Scripts', process.platform === 'win32' ? 'python.exe' : 'python')
+      const asrPy = join(BILI_DIR, '.venv-asr', VENV_BIN, process.platform === 'win32' ? 'python.exe' : 'python')
       const steps = []
       // 1. 建 venv-asr（同样走 3.12 → 3.11 → 3.10 降级）
       if (!existsSync(asrPy)) {
@@ -655,7 +662,7 @@ export function apply(ctx) {
 
       // 2. 转写依赖（只在开了转写时检查）
       if (cfg.transcribe) {
-        const asrPy = join(BILI_DIR, '.venv-asr', 'Scripts', process.platform === 'win32' ? 'python.exe' : 'python')
+        const asrPy = join(BILI_DIR, '.venv-asr', VENV_BIN, process.platform === 'win32' ? 'python.exe' : 'python')
         if (!existsSync(asrPy)) {
           problems.push('转写依赖缺失：开了「本地转写」但没装转写环境，先点「装转写依赖」或关掉转写')
         } else {
@@ -867,6 +874,7 @@ export function apply(ctx) {
         return send(res, 200, { ok: false, loggedIn: false, error: String(e?.message || e) })
       }
     }
+
 
     // ── 扫码登录：生成二维码 ──
     if (req.method === 'POST' && path === '/login/start') {

@@ -27,6 +27,7 @@ bili.py —— 大肥鱼自己的刷B站命令行（独立于 dsh-bili-scroll �
 import argparse
 import asyncio
 import base64
+import contextlib
 import json
 import os
 import re
@@ -51,6 +52,66 @@ HOME_CFG_FILE = Path.home() / ".dsh" / "bili-duty" / "config.json"
 STATE_FILE = BASE / "state.json"
 SEEN_FILE = BASE / "seen.md"
 OUT_DIR = BASE / "out"
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# 2026-10-25 加：跨平台文件锁（防并发写冲突）
+#
+# 为什么：seen.md / state.json / config.json 都是「读-改-写」。
+#   同一台机器上两个宿主（桌面版 + web 版）、或者定时任务和手动跑同时进行时，
+#   后写的会把先写的覆盖掉 —— 丢记录 ⇒ 重复刷视频、重复发评论。
+#
+# 为什么用 mkdir 而不是 msvcrt.locking / fcntl.flock：
+#   后两个在 Windows 和 Linux 上语义不同（Windows 要求锁住至少 1 字节、解锁必须同偏移），
+#   跨平台容易出坑。而 os.mkdir 在所有平台上都是**原子**的 ——
+#   成功 = 抢到了锁，FileExistsError = 别人占着。
+#
+# 僵尸锁：持锁进程崩了不会自己 rmdir，所以超过 LOCK_STALE_SEC 秒的锁直接抢过来重建，
+#   否则一次崩溃就会永久锁死。
+# ═══════════════════════════════════════════════════════════════════════
+LOCK_STALE_SEC = 180.0
+
+
+@contextlib.contextmanager
+def file_lock(target, timeout: float = 10.0):
+    """对 target 文件加独占锁。
+
+    yield 一个 bool：True = 抢到了，False = 等超时了（调用方自己决定要不要硬写）。
+    用法：
+        with file_lock(SEEN_FILE) as got:
+            if got:
+                SEEN_FILE.write_text(...)
+    """
+    lock_dir = Path(str(target) + ".lockdir")
+    start = time.time()
+    got = False
+    while time.time() - start < timeout:
+        try:
+            os.mkdir(lock_dir)
+            got = True
+            break
+        except FileExistsError:
+            # 僵尸锁回收：持锁的人崩了，目录不会自己消失
+            try:
+                if time.time() - lock_dir.stat().st_mtime > LOCK_STALE_SEC:
+                    try:
+                        lock_dir.rmdir()
+                    except Exception:
+                        pass
+                    continue
+            except Exception:
+                pass
+            time.sleep(0.05)
+        except Exception:
+            break
+    try:
+        yield got
+    finally:
+        if got:
+            try:
+                lock_dir.rmdir()
+            except Exception:
+                pass
 
 
 def _load_seen_bvs(days: int = 0):
@@ -99,30 +160,34 @@ def _trim_seen(days: int) -> int:
     """
     if not days or days <= 0:
         return 0
-    try:
-        text = SEEN_FILE.read_text(encoding="utf-8", errors="replace")
-    except Exception:
-        return 0
-
-    from datetime import date, timedelta
-    cutoff = (date.today() - timedelta(days=days)).isoformat()
-
-    rec = re.compile(r"^\s*[-*]?\s*(\d{4}-\d{2}-\d{2})\s*\|")
-    kept = []
-    removed = 0
-    for line in text.split("\n"):
-        m = rec.match(line)
-        if m and m.group(1) < cutoff:
-            removed += 1
-            continue
-        kept.append(line)
-
-    if removed > 0:
+    # 2026-10-25：整个「读-过滤-写」都在锁内，否则两个进程会互相覆盖
+    with file_lock(SEEN_FILE) as got:
+        if not got:
+            return 0
         try:
-            SEEN_FILE.write_text("\n".join(kept), encoding="utf-8")
+            text = SEEN_FILE.read_text(encoding="utf-8", errors="replace")
         except Exception:
             return 0
-    return removed
+
+        from datetime import date, timedelta
+        cutoff = (date.today() - timedelta(days=days)).isoformat()
+
+        rec = re.compile(r"^\s*[-*]?\s*(\d{4}-\d{2}-\d{2})\s*\|")
+        kept = []
+        removed = 0
+        for line in text.split("\n"):
+            m = rec.match(line)
+            if m and m.group(1) < cutoff:
+                removed += 1
+                continue
+            kept.append(line)
+
+        if removed > 0:
+            try:
+                SEEN_FILE.write_text("\n".join(kept), encoding="utf-8")
+            except Exception:
+                return 0
+        return removed
 
 
 async def _load_blocked_ups():
@@ -179,14 +244,18 @@ async def _load_blocked_ups():
             names.add(n)
 
     if changed:
-        try:
-            raw["blockedUps"] = ups
-            cfg_path.write_text(
-                json.dumps(raw, ensure_ascii=False, indent=2) + "\n",
-                encoding="utf-8",
-            )
-        except Exception:
-            pass
+        # 2026-10-25：加锁，防两个进程同时改 config.json 互相覆盖
+        with file_lock(cfg_path) as got:
+            if not got:
+                return
+            try:
+                raw["blockedUps"] = ups
+                cfg_path.write_text(
+                    json.dumps(raw, ensure_ascii=False, indent=2) + "\n",
+                    encoding="utf-8",
+                )
+            except Exception:
+                pass
 
     return mids, names
 
@@ -621,7 +690,11 @@ def load_up_state() -> dict:
 
 
 def save_up_state(state: dict) -> None:
-    UP_FILE.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+    # 2026-10-25：加锁，防两个进程同时写 seen-up.json 互相覆盖
+    with file_lock(UP_FILE) as got:
+        if not got:
+            return
+        UP_FILE.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 async def resolve_uid(cred, name: str) -> dict | None:
@@ -671,8 +744,23 @@ async def cmd_up_feed(args):
         emit({"ok": False, "error": "未登录"})
         return 4
     watched = cfg.get("watchedUps") or []
+    # ⭐ 2026-10-25 加：屏蔽名单在 UP 主轮也要生效。
+    #   以前只在 cmd_search 里过滤，导致「既屏蔽又关注同一个人」时 up-feed 照报 —— 自相矛盾。
+    blk_mids, blk_names = await _load_blocked_ups()
+    blocked_here = 0
+    if blk_mids or blk_names:
+        kept_ups = []
+        for u in watched:
+            uid = int(u.get("uid") or 0)
+            nm = str(u.get("name") or "").strip()
+            if (uid > 0 and uid in blk_mids) or (nm and nm in blk_names):
+                blocked_here += 1
+                continue
+            kept_ups.append(u)
+        watched = kept_ups
     if not watched:
-        emit({"ok": True, "watchedUps": [], "message": "config.json 里 watchedUps 还是空的"})
+        emit({"ok": True, "watchedUps": [], "blockedSkipped": blocked_here,
+              "message": "固定 UP 主名单为空（或全被屏蔽名单挡住了）"})
         return 0
 
     state = load_up_state()
@@ -739,15 +827,102 @@ async def cmd_up_feed(args):
     save_up_state(state)
     if resolved_cfg_changed:
         cfg_path = _cfg_file()
-        data = {}
-        try:
-            data = json.loads(cfg_path.read_text(encoding="utf-8"))
-        except Exception:
-            pass
-        data["watchedUps"] = watched
-        cfg_path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        # 2026-10-25：整个「读-改-写」都在锁内
+        with file_lock(cfg_path) as got:
+            if got:
+                data = {}
+                try:
+                    data = json.loads(cfg_path.read_text(encoding="utf-8"))
+                except Exception:
+                    pass
+                data["watchedUps"] = watched
+                cfg_path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
     emit({"ok": True, "sinceDays": since_days, "count": len([x for x in all_new if x.get("bvid")]), "items": all_new})
+    return 0
+
+
+async def cmd_mark_seen(args):
+    """把「看过的视频」记进 seen.md —— 加锁、批量、自动防重复。
+
+    ⭐ 2026-10-25 加（用户要求「彻底解决」）：
+    以前是模型直接用文件工具改 seen.md，那条路绕过了 bili.py 的所有锁 ——
+    等于「读一遍、自己加、再整篇覆盖回去」，两个任务同时跑就互相擦。
+    现在统一走这个命令：整段「读-判重-追加-写回」都在 file_lock 内。
+
+    用法：
+      bili.py mark-seen --bv BV1xxx --title "标题" [--note "一句结论"] [--date 2026-10-25]
+      bili.py mark-seen --items '[{"bv":"BV1xx","title":"...","note":"..."}]'
+    """
+    from datetime import date as _date
+
+    items = []
+    if getattr(args, "items", None):
+        try:
+            raw = json.loads(args.items)
+        except Exception as e:
+            emit({"ok": False, "error": "items 不是合法 JSON：" + str(e)})
+            return 1
+        if isinstance(raw, dict):
+            raw = [raw]
+        for it in (raw or []):
+            if isinstance(it, dict) and it.get("bv"):
+                items.append({
+                    "bv": str(it["bv"]).strip(),
+                    "title": str(it.get("title") or "").strip(),
+                    "note": str(it.get("note") or "").strip(),
+                    "date": str(it.get("date") or "").strip(),
+                })
+    elif getattr(args, "bv", None):
+        items.append({
+            "bv": str(args.bv).strip(),
+            "title": str(getattr(args, "title", "") or "").strip(),
+            "note": str(getattr(args, "note", "") or "").strip(),
+            "date": str(getattr(args, "date", "") or "").strip(),
+        })
+
+    if not items:
+        emit({"ok": False, "error": "没有要记的内容（用 --bv 或 --items）"})
+        return 1
+
+    today = _date.today().isoformat()
+    added, skipped = [], []
+
+    with file_lock(SEEN_FILE) as got:
+        if not got:
+            emit({"ok": False, "error": "等锁超时：另一个任务正在写 seen.md，稍后重试"})
+            return 1
+        try:
+            text = SEEN_FILE.read_text(encoding="utf-8", errors="replace")
+        except Exception:
+            text = "# 判重表（看过的都记这儿）\n"
+
+        # 已在表里的 BV —— 用和判重同一套正则，保证口径一致
+        existing = set(re.findall(r"BV[0-9A-Za-z]{10}", text))
+
+        lines = []
+        for it in items:
+            bv = it["bv"]
+            if not re.fullmatch(r"BV[0-9A-Za-z]{10}", bv):
+                skipped.append({"bv": bv, "why": "BV 号格式不对"})
+                continue
+            if bv in existing:
+                skipped.append({"bv": bv, "why": "表里已有"})
+                continue
+            existing.add(bv)
+            d = it["date"] or today
+            line = "- %s | %s | %s" % (d, bv, it["title"] or "（无标题）")
+            if it["note"]:
+                line += " | " + it["note"]
+            lines.append(line)
+            added.append(bv)
+
+        if lines:
+            if not text.endswith("\n"):
+                text += "\n"
+            SEEN_FILE.write_text(text + "\n".join(lines) + "\n", encoding="utf-8")
+
+    emit({"ok": True, "added": added, "skipped": skipped, "file": str(SEEN_FILE)})
     return 0
 
 
@@ -842,6 +1017,15 @@ def main() -> int:
     p.set_defaults(func=cmd_asr)
 
     sub.add_parser("ups", help="看固定 UP 主名单与各自最新投稿").set_defaults(func=cmd_ups)
+
+    # ⭐ 2026-10-25 加：把看过的视频记进 seen.md（走锁，别让模型直接改文件）
+    p = sub.add_parser("mark-seen", help="把看过的视频记进 seen.md（加锁、防重复）")
+    p.add_argument("--bv", default="", help="单个 BV 号")
+    p.add_argument("--title", default="", help="标题")
+    p.add_argument("--note", default="", help="一句结论")
+    p.add_argument("--date", default="", help="日期 YYYY-MM-DD，默认今天")
+    p.add_argument("--items", default="", help='批量：JSON 数组 [{"bv","title","note","date"}]')
+    p.set_defaults(func=cmd_mark_seen)
 
     p = sub.add_parser("up-feed", help="查固定 UP 主有没有新视频")
     p.add_argument("--since-days", type=int, default=3, help="只看最近几天的（0=不限）")
