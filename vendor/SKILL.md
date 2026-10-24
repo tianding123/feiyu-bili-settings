@@ -108,6 +108,11 @@ python bili.py subtitle BVxxxxxxxxxx
 python bili.py comments BVxxxxxxxxxx --num 30               :: 30 是命令默认值，不是配置项
 python bili.py asr BVxxxxxxxxxx                            :: 没字幕时本地转写（transcribe=true 才用）
 python bili.py reply BVxxxxxxxxxx "正文"                   :: config 开关/--force 才放行
+python bili.py reply BVxxxxxxxxxx "正文" --rpid <rpid> --root <root>   :: 回在某条评论下面
+python bili.py reply BVxxxxxxxxxx "正文" --controversy yes             :: 声明「这条已判为有争议」
+   ⚠️ **判过有争议的，一定要带 `--controversy yes`** ——
+   `commentPolicy=dm-only` 时它会直接拒绝发送（exit 3），逼你改走私信。
+   这是**代码级硬闸**，不是流程约定：忘了走流程也发不出去。
 python bili.py dm BVxxxxxxxxxx "正文"                      :: 发私信（开头自动带 BV 号；dmOnly 才放行）
 python bili.py login                                       :: 重新扫码（阻塞轮询）
 python bili.py whoami
@@ -144,6 +149,18 @@ python bili.py up-feed --since-days <upSinceDays>          :: 查固定 UP 主�
 🟢 **固定 UP 主轮完全不适用这一套**（⭐ 2026-10-25 加）——
 特别关注的 UP 主发什么就正常评论什么，不判争议、不走策略。
 这套策略只管**关键词搜索**那一路。
+
+🔒 **闸在发送前，而且是代码级的**（⭐ 2026-10-25 焊死）——
+判争议 → 定策略 → **然后才发**，顺序不能反。
+
+- 流程上：先判、再决定 `reply` 还是 `dm`
+- 代码上：`bili.py reply --controversy yes` + `commentPolicy=dm-only`
+  → **直接拒绝发送**（exit 3），提示改用 `bili.py dm`
+- 所以「忘了走流程就发出去」这条路已经被堵死了
+
+⚠️ **判过有争议的，调用 `reply` 时必须带 `--controversy yes`** ——
+不带就等于告诉程序「这条没争议」，dm-only 的闸就不会拦你。
+这是你要自己负责的那一半：**判了要如实声明**。
 
 ### ⭐ 最重要的一句：三个选项都只对「有争议的视频」生效
 

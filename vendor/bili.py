@@ -480,6 +480,33 @@ async def cmd_reply(args):
                     "或者本人当场让你发时加 --force。",
         })
         return 2
+    # ══════════════════════════════════════════════════
+    # ⭐ 2026-10-25 加：「评论策略」硬检查（之前只有 SKILL.md 的流程约束，
+    #    騡量不住模型漏做一步 —— 现在命令自己会拦）。
+    #
+    #    规则（不影响无争议的正常评论）：
+    #      · dm-only 策略 + 这条已判为有争议 → 拒绝 reply，提示改走私信
+    #      · 只拦这一种组合 —— 因为只有它是「明确不该公开发言」
+    #    参数：--controversy yes（或 true/1）表示「这条已经判过有争议」
+    #         不传 = 没判 / 默认无争议
+    # ══════════════════════════════════════════════════
+    if not args.force:
+        policy = str(cfg.get("commentPolicy") or "author-first").strip().lower()
+        controversy = str(getattr(args, "controversy", "") or "").strip().lower()
+        is_controversial = controversy in ("yes", "true", "1", "y")
+        if policy == "dm-only" and is_controversial:
+            emit({
+                "ok": False,
+                "blocked": True,
+                "reason": "policy-dm-only",
+                "hint": "这条已经判为【有争议】，而 commentPolicy=dm-only —— "
+                        "不许发公开评论。改用："
+                        "python bili.py dm <BV号> '正文'（私信主人）。",
+                "policy": policy,
+                "controversy": True,
+            })
+            return 3
+
     # ⚠️ 2026-10-18 修：以前直接把 core.bili_reply 的返回 print 出来 ——
     #    而 bili_reply 失败时返回的是 {"success": false, "error": ...}，
     #    调用方一眼看不出失败（那次真发出去的是 -101 账号未登录，却被报成「成功」）。
@@ -1041,6 +1068,9 @@ def main() -> int:
     p.add_argument("--rpid", type=int, default=0)
     p.add_argument("--root", type=int, default=0)
     p.add_argument("--force", action="store_true", help="本人当场让你发的")
+    p.add_argument("--controversy", default="",
+                   help="这条是不是已判为有争议：yes/不传。"
+                        "dm-only 策略下传 yes 会被拒，应改走 dm")
     p.set_defaults(func=cmd_reply)
 
     p = sub.add_parser("mentions", help="列出收到的 @ 消息（回应召唤用）")
