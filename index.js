@@ -8,13 +8,14 @@
  *   · 全程 try/catch，绝不向上抛 —— 这个插件挂了不该影响 DSH 启动
  *   · 不 append session 事件、不碰别人的服务
  */
-import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { appendFileSync, copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { spawn } from 'node:child_process'
 import { loginStart, loginPoll, saveCredential, renderQrPng } from './lib/login.mjs'
 import { ensureUv } from './lib/uvfetch.mjs'
+import { startSummonWatcher, pollSummonOnce } from './lib/summon.mjs'
 
 export const name = 'feiyu-bili-settings'
 // skills 必须列进来：注册 skill 要等它先就绪，靠 apply 时 ctx.get 可能扑空
@@ -22,6 +23,17 @@ export const inject = ['webServer', 'skills']
 
 const PKG_DIR = dirname(fileURLToPath(import.meta.url))
 const VENDOR_DIR = join(PKG_DIR, 'vendor')
+
+/** 回应召唤的诊断日志：一行一个事实。写失败绝不影响功能。 */
+const SUMMON_LOG = join(homedir(), '.dsh', 'bili-duty', 'summon.log')
+function summonLog(line) {
+  try {
+    mkdirSync(dirname(SUMMON_LOG), { recursive: true })
+    appendFileSync(SUMMON_LOG, new Date().toISOString() + ' ' + line + '\n', 'utf8')
+  } catch {
+    /* 日志失败绝不影响功能 */
+  }
+}
 
 const DSH_HOME = process.env.DSH_HOME || join(homedir(), '.dsh')
 const HOME_DIR = join(DSH_HOME, 'bili-duty')
@@ -398,6 +410,17 @@ export function apply(ctx) {
   // 启动时把包里的 Python 脚本铺到家目录（只在缺失时铺）
   ensureHomeFiles()
 
+  // ⭐ 2026-10-25：回应召唤 —— 后台轮询 B站 @ 消息，有召唤就唤醒 agent。
+  //    只在 config.json 的 respondSummon=true 时才真的去查（pollSummonOnce 内部判）。
+  //    轮询本身不调模型，所以常驻成本 ≈ 0 token。
+  try {
+    const stopWatcher = startSummonWatcher(ctx, summonLog, 60000)
+    ctx.effect(() => stopWatcher, 'feiyu-bili-settings: 回应召唤轮询')
+    summonLog('[summon] watcher started (60s interval)')
+  } catch (e) {
+    summonLog('[summon] watcher 启动失败: ' + String(e && e.message ? e.message : e))
+  }
+
   // 把自带的 SKILL.md 注册成 skill（这样不依赖别的 skill 插件）
   try {
     const skills = ctx.skills
@@ -489,6 +512,8 @@ export function apply(ctx) {
         'watchedUps', 'upCommentPerRound', 'upCommentPerDay', 'upSinceDays', 'scheduleSessionId',
         'blockedUps',
         'personaFile',
+        // ⭐ 2026-10-25：回应召唤（目前只有配置位，功能待接）
+        'respondSummon', 'summonMasters', 'summonAcceptOthers', 'summonRateLimit',
       ])
       const cur = readJson(CFG_FILE, {})
       const next = { ...cur }

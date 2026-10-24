@@ -280,6 +280,11 @@ DEFAULTS = {
     # 默认就指向家目录（换机器也对）；设置页装了转写依赖后会写死成真实路径
     "asrPython": str(Path.home() / ".dsh" / "bili-duty" / ".venv-asr" / "Scripts" / "python.exe"),
     "hfCache": str(Path.home() / ".dsh" / "bili-duty" / ".hf-cache"),
+    # ⭐ 2026-10-25：回应召唤（目前只有配置位，功能待接）
+    "respondSummon": False,
+    "summonMasterMid": 0,
+    "summonKeywords": [],
+    "summonPerRound": 3,
 }
 
 
@@ -496,6 +501,45 @@ async def cmd_reply(args):
         "hint": "这次评论没发出去。若报 -101 账号未登录 ⇒ 凭证只能读不能写，需要重新扫码或检查账号状态。",
     })
     return 1
+
+
+async def cmd_mentions(args):
+    """列出收到的 @ 消息（结构化，给「回应召唤」用）。
+
+    ⭐ 2026-10-25 加：B站 的 @ 通知只能轮询查（没有推送接口）。
+       每条会带 bvid / rpid / root，够直接去回复那条评论。
+    """
+    raw = await core.bili_received_at_and_likes()
+    try:
+        data = json.loads(raw) if isinstance(raw, str) else raw
+    except Exception:
+        data = {"raw": str(raw)[:500]}
+    if data.get("at_error"):
+        emit({"ok": False, "error": data["at_error"]})
+        return 3
+    at = data.get("at") or {}
+    items = at.get("items") or []
+    out = []
+    for it in items:
+        user = it.get("user") or {}
+        item = it.get("item") or {}
+        uri = str(item.get("uri") or "")
+        m = re.search(r"(BV[0-9A-Za-z]{10})", uri)
+        out.append({
+            "mid": user.get("mid"),
+            "name": user.get("nickname"),
+            "bvid": m.group(1) if m else "",
+            "text": str(item.get("title") or "")[:300],
+            "source_content": str(item.get("source_content") or "")[:300],
+            "rpid": item.get("source_id") or 0,      # 要回复的那条
+            "root": item.get("target_id") or 0,      # 它所在楼层的根评论
+            "business": item.get("business") or "",
+            "type": item.get("type") or "",
+        })
+    limit = max(1, int(getattr(args, "limit", 20) or 20))
+    out = out[:limit]
+    emit({"ok": True, "count": len(out), "items": out})
+    return 0
 
 
 async def cmd_dm(args):
@@ -998,6 +1042,10 @@ def main() -> int:
     p.add_argument("--root", type=int, default=0)
     p.add_argument("--force", action="store_true", help="本人当场让你发的")
     p.set_defaults(func=cmd_reply)
+
+    p = sub.add_parser("mentions", help="列出收到的 @ 消息（回应召唤用）")
+    p.add_argument("--limit", type=int, default=20)
+    p.set_defaults(func=cmd_mentions)
 
     p = sub.add_parser("dm", help="发 B站私信（开头自动带 BV 号）")
     p.add_argument("bvid", help="视频 BV 号（会原样放在私信开头）")

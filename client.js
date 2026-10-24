@@ -154,6 +154,10 @@ window.__ModuleLoader__.load({
       const [blockedUps, setBlockedUps] = React.useState([])
       const [blkPick, setBlkPick] = React.useState('')
       const [newBlk, setNewBlk] = React.useState({ name: '', uid: '' })
+      // ── 召唤人名单（2026-10-25）──
+      const [summonMasters, setSummonMasters] = React.useState([])
+      const [summonPick, setSummonPick] = React.useState('')
+      const [newSummon, setNewSummon] = React.useState({ name: '', uid: '' })
       const [slots, setSlots] = React.useState([
         { start: '12:00', end: '14:00' },
         { start: '17:00', end: '19:00' },
@@ -420,6 +424,7 @@ window.__ModuleLoader__.load({
             setScheduleHint(r.scheduleHint || '')
             setUps(Array.isArray(c.watchedUps) ? c.watchedUps : [])
             setBlockedUps(Array.isArray(c.blockedUps) ? c.blockedUps : [])
+            setSummonMasters(Array.isArray(c.summonMasters) ? c.summonMasters : [])
             if (Array.isArray(c.slots) && c.slots.length) {
               setSlots(c.slots.map((s) => ({ start: s.start || '12:00', end: s.end || '14:00' })))
             }
@@ -475,6 +480,12 @@ window.__ModuleLoader__.load({
             personaFile: String(cfg.personaFile || '').trim(),
             watchedUps: ups.map((u) => ({ name: String(u.name || '').trim(), uid: Number(u.uid) || 0 })).filter((u) => u.name),
             blockedUps: blockedUps.map((u) => ({ name: String(u.name || '').trim(), uid: Number(u.uid) || 0 })).filter((u) => u.name || u.uid),
+            // ⭐ 2026-10-25：召唤人名单（可加多个）
+            summonMasters: summonMasters.map((u) => ({ name: String(u.name || '').trim(), mid: Number(u.mid) || 0 })).filter((u) => u.name || u.mid),
+            // ⭐ 2026-10-25 修：这三个之前漏了，导致一保存就回弹
+            respondSummon: !!cfg.respondSummon,
+            summonAcceptOthers: !!cfg.summonAcceptOthers,
+            summonRateLimit: Number(cfg.summonRateLimit) || 3,
             upCommentPerRound: Number(cfg.upCommentPerRound) || 0,
             upCommentPerDay: Number(cfg.upCommentPerDay) || 0,
             upSinceDays: Number(cfg.upSinceDays) || 3,
@@ -1036,6 +1047,93 @@ window.__ModuleLoader__.load({
             placeholder: '例如：你的B站昵称',
             onChange: (v) => set('mentionName', v),
           }),
+        ),
+
+        // ── 回应召唤（⭐ 2026-10-25 加：先做界面，功能代码待定）──
+        h(Section, { title: '回应召唤', lined: true },
+          h(Toggle, {
+            label: '有人 @ 我时自动回应',
+            note: '别人在评论区 @ 你，就在那条评论下面回复',
+            value: !!cfg.respondSummon,
+            onChange: (v) => set('respondSummon', v),
+          }),
+
+          cfg.respondSummon ? h('div', {
+            'data-fbs-sec': '',
+            style: { paddingLeft: 12, borderLeft: '2px solid var(--dsw-alias-border-subtle,#3a3f45)' },
+          },
+            // ⭐ 2026-10-25：召唤人改成列表（可加多个，和「关注 UP 主」一个做法）
+            h('div', { 'data-fbs-row': '' },
+              h('div', { 'data-fbs-grow': '' },
+                h('div', { 'data-fbs-label': '' }, '召唤人'),
+                h('div', { 'data-fbs-note': '' },
+                  summonMasters.length
+                    ? `共 ${summonMasters.length} 个 —— 选一个点删除`
+                    : '还没有，下面添加（名单为空 = 谁 @ 都回）'),
+              ),
+              h('select', {
+                'data-fbs-input': '',
+                value: summonPick,
+                onChange: (e) => setSummonPick(e.target.value),
+                style: { maxWidth: '220px' },
+                disabled: !summonMasters.length,
+              },
+                h('option', { value: '' }, summonMasters.length ? '（选一个）' : '（空）'),
+                ...summonMasters.map((u, k) => h('option', { key: `spick-${k}`, value: String(k) },
+                  `${u.name}${u.mid ? ` · ${u.mid}` : ''}`)),
+              ),
+              h('button', {
+                'data-fbs-btn': '', 'data-danger': '',
+                disabled: !summonMasters.length || summonPick === '',
+                onClick: () => {
+                  const k = Number(summonPick)
+                  if (Number.isInteger(k) && k >= 0 && k < summonMasters.length) {
+                    setSummonMasters(summonMasters.filter((_, m) => m !== k))
+                    setSummonPick('')
+                  }
+                },
+              }, '删除'),
+            ),
+            h('div', { 'data-fbs-row': '' },
+              h('input', {
+                'data-fbs-input': '', type: 'text', placeholder: '昵称（随便写，方便认）',
+                value: newSummon.name,
+                onChange: (e) => setNewSummon({ ...newSummon, name: e.target.value }),
+              }),
+              h('input', {
+                'data-fbs-num': '', type: 'text', placeholder: 'uid（必填）',
+                value: newSummon.uid,
+                onChange: (e) => setNewSummon({ ...newSummon, uid: e.target.value }),
+                style: { width: '130px' },
+              }),
+              h('button', {
+                'data-fbs-btn': '',
+                onClick: () => {
+                  const mid = Number(String(newSummon.uid).trim()) || 0
+                  if (!mid) return
+                  const nm = String(newSummon.name).trim() || String(mid)
+                  setSummonMasters([...summonMasters, { name: nm, mid }])
+                  setNewSummon({ name: '', uid: '' })
+                },
+              }, '添加'),
+            ),
+            h('div', { 'data-fbs-note': '' },
+              'uid 一定要填数字 —— 只有名单里这些人 @ 你时才回应。'),
+
+              h(Toggle, {
+                label: '接受名单外的召唤',
+                note: '开着的话，名单外的人 @ 你也会回（受下面的频率限制）；关掉就只回名单里的人',
+                value: !!cfg.summonAcceptOthers,
+                onChange: (v) => set('summonAcceptOthers', v),
+              }),
+              cfg.summonAcceptOthers ? h(NumField, {
+                label: '名单外每 10 分钟最多回几条',
+                note: '防止陌生人刷屏。名单里的人完全不受这个限制',
+                value: cfg.summonRateLimit, min: 1, max: 20,
+                onChange: (v) => set('summonRateLimit', v),
+              }) : null,
+            // 2026-10-25 删：功能已经接了，这句「只做了界面」的提示过时了
+          ) : null,
         ),
 
         // ── 特别关注的 UP ──
