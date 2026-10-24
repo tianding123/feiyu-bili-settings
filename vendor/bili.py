@@ -492,8 +492,16 @@ async def cmd_reply(args):
     # ══════════════════════════════════════════════════
     if not args.force:
         policy = str(cfg.get("commentPolicy") or "author-first").strip().lower()
+        # 2026-10-25 改：优先信 judge 记下的结果，--controversy 只作覆盖。
+        # 这样模型忘了传参数也拦得住。
+        recorded = controversy_of(args.bvid)
         controversy = str(getattr(args, "controversy", "") or "").strip().lower()
-        is_controversial = controversy in ("yes", "true", "1", "y")
+        if controversy in ("yes", "true", "1", "y"):
+            is_controversial = True
+        elif controversy in ("no", "false", "0", "n"):
+            is_controversial = False
+        else:
+            is_controversial = bool(recorded)
         if policy == "dm-only" and is_controversial:
             emit({
                 "ok": False,
@@ -504,6 +512,7 @@ async def cmd_reply(args):
                         "python bili.py dm <BV号> '正文'（私信主人）。",
                 "policy": policy,
                 "controversy": True,
+                "source": ("参数" if controversy else "judge 记录"),
             })
             return 3
 
@@ -528,6 +537,62 @@ async def cmd_reply(args):
         "hint": "这次评论没发出去。若报 -101 账号未登录 ⇒ 凭证只能读不能写，需要重新扫码或检查账号状态。",
     })
     return 1
+
+
+def _controversy_file() -> Path:
+    """记录「哪些视频判过争议」的小账本。"""
+    return CFG_FILE.parent / "controversy.json"
+
+
+def controversy_of(bvid: str):
+    """读某条视频的判定结果。
+    返回 True（有争议）/ False（没争议）/ None（没判过）。
+    """
+    try:
+        data = json.loads(_controversy_file().read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    item = data.get(str(bvid))
+    if not isinstance(item, dict):
+        return None
+    return bool(item.get("controversial"))
+
+
+async def cmd_judge(args):
+    """记下「这条视频判过争议了吗」的结果。
+
+    ⭐ 2026-10-25 加：之前 reply 靠模型记得传 --controversy，
+       模型忘了这道闸就不会响。现在判定结果落盘，
+       reply 自己去查 —— 模型忘了也拦得住。
+    """
+    bv = str(args.bvid).strip()
+    if not re.fullmatch(r"BV[0-9A-Za-z]{10}", bv):
+        emit({"ok": False, "error": "单号格式不对，应该是 12 位的 BV 号"})
+        return 1
+    val = str(getattr(args, "controversial", "") or "").strip().lower()
+    if val not in ("yes", "no", "true", "false", "1", "0", "y", "n"):
+        emit({"ok": False, "error": "--controversial 只能是 yes 或 no"})
+        return 1
+    is_yes = val in ("yes", "true", "1", "y")
+
+    p = _controversy_file()
+    with file_lock(p):
+        data = {}
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
+        except Exception:
+            data = {}
+        data[bv] = {
+            "controversial": is_yes,
+            "at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        }
+        if len(data) > 500:
+            keys = sorted(data.keys(), key=lambda k: data[k].get("at", ""))[-500:]
+            data = {k: data[k] for k in keys}
+        p.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    emit({"ok": True, "bvid": bv, "controversial": is_yes})
+    return 0
 
 
 async def cmd_mentions(args):
@@ -1072,6 +1137,11 @@ def main() -> int:
                    help="这条是不是已判为有争议：yes/不传。"
                         "dm-only 策略下传 yes 会被拒，应改走 dm")
     p.set_defaults(func=cmd_reply)
+
+    j = sub.add_parser("judge", help="记下这条视频判过争议了吗")
+    j.add_argument("bvid")
+    j.add_argument("--controversial", required=True, help="yes 或 no")
+    j.set_defaults(func=cmd_judge)
 
     p = sub.add_parser("mentions", help="列出收到的 @ 消息（回应召唤用）")
     p.add_argument("--limit", type=int, default=20)

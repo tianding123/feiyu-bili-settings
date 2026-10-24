@@ -107,6 +107,7 @@ python bili.py search "关键词" --since-days <searchDays>       :: 只要最�
 python bili.py subtitle BVxxxxxxxxxx
 python bili.py comments BVxxxxxxxxxx --num 30               :: 30 是命令默认值，不是配置项
 python bili.py asr BVxxxxxxxxxx                            :: 没字幕时本地转写（transcribe=true 才用）
+python bili.py judge BVxxxxxxxxxx --controversial yes   :: 记下这条判过争议了吗（必做）
 python bili.py reply BVxxxxxxxxxx "正文"                   :: config 开关/--force 才放行
 python bili.py reply BVxxxxxxxxxx "正文" --rpid <rpid> --root <root>   :: 回在某条评论下面
 python bili.py reply BVxxxxxxxxxx "正文" --controversy yes             :: 声明「这条已判为有争议」
@@ -150,17 +151,35 @@ python bili.py up-feed --since-days <upSinceDays>          :: 查固定 UP 主�
 特别关注的 UP 主发什么就正常评论什么，不判争议、不走策略。
 这套策略只管**关键词搜索**那一路。
 
-🔒 **闸在发送前，而且是代码级的**（⭐ 2026-10-25 焊死）——
-判争议 → 定策略 → **然后才发**，顺序不能反。
+🔒 **闸在发送前，而且是代码级的**（⭐ 2026-10-25 彻底焊死）——
+判争议 → **用 `judge` 记下来** → 定策略 → 然后才发，顺序不能反。
 
-- 流程上：先判、再决定 `reply` 还是 `dm`
-- 代码上：`bili.py reply --controversy yes` + `commentPolicy=dm-only`
-  → **直接拒绝发送**（exit 3），提示改用 `bili.py dm`
-- 所以「忘了走流程就发出去」这条路已经被堵死了
+### 🔴 判完必须写一条 `judge`（硬要求）
 
-⚠️ **判过有争议的，调用 `reply` 时必须带 `--controversy yes`** ——
-不带就等于告诉程序「这条没争议」，dm-only 的闸就不会拦你。
-这是你要自己负责的那一半：**判了要如实声明**。
+```bash
+python bili.py judge <BV号> --controversial yes   # 判为有争议
+python bili.py judge <BV号> --controversial no    # 判为没争议
+```
+
+**这条命令把结果写进 `bili-duty/controversy.json`（加锁、防并发）。**
+
+**然后 `reply` 会自己去查这个文件：**
+
+```
+commentPolicy=dm-only  +  该 BV 判过有争议  →  直接拒绝（exit 3），提示改走 dm
+```
+
+**⚠️ 关键：`reply` 不再依赖你记得传参数。** 你只要判完写一条 `judge`，
+忘了传 `--controversy` 也照样拦得住。
+
+- `--controversy yes/no` 现在只是**临时覆盖**（比如你想改口）
+- 不传 = 读 `judge` 记录
+- 没判过 = 当作没争议（所以**每判一条就写一条**，别漏）
+
+### 为什么这样设计
+
+之前（0.4.49）光靠模型记得传参数，漏了就白判。
+现在是「判定结果落盘 + 命令自查」——模型漏传参数，闸照样响。
 
 ### ⭐ 最重要的一句：三个选项都只对「有争议的视频」生效
 
