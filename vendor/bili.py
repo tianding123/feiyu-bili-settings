@@ -722,11 +722,13 @@ async def cmd_dms(args):
         except Exception:
             pass
 
-        # 只要最后一条是对方发的（我没回），就算待回复
+        # ⭐ 2026-10-25 修：B站 返回的消息是【从新到旧】排序的，
+        #   之前用 from_them[-1] 取到的是【最旧】那条 —— 所以永远发现不了新私信。
+        #   现在按 ts 取最新的那一条。
         from_them = [x for x in msgs if not x["is_mine"]]
         if not from_them:
             continue
-        last_them = from_them[-1]
+        last_them = max(from_them, key=lambda x: x.get("ts") or 0)
         out.append({
             "mid": talker,
             "name": "",
