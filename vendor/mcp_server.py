@@ -550,7 +550,18 @@ async def bili_reply(bvid: str, text: str, rpid: int = 0, root: int = 0) -> str:
                 credential=cred,
             )
 
-        return json.dumps({"success": True, "message": "评论发送成功"}, ensure_ascii=False)
+        # ⭐ 2026-10-25 修：原来只返回 success + message，【不带 rpid】——
+        #   导致 bili.py 那边 res.get("rpid") 永远是 0，
+        #   remember_my_reply 第一行 if not rpid: return 直接跳过，
+        #   my-replies.json 永远是空表 → 「楼中楼里的 @」从来检测不到。
+        #   现在把 rpid 一并返回。
+        _new_rpid = 0
+        if isinstance(result, dict):
+            _new_rpid = result.get("rpid") or (result.get("reply") or {}).get("rpid") or 0
+        return json.dumps(
+            {"success": True, "message": "评论发送成功", "rpid": _new_rpid},
+            ensure_ascii=False,
+        )
     except Exception as e:
         return json.dumps({"success": False, "error": str(e)}, ensure_ascii=False)
 
