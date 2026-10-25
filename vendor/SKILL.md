@@ -128,6 +128,17 @@ watcher 每轮 → 查这张表里的评论有没有新回复
 
 ## 命令（在家目录 `~/.dsh/bili-duty/` 下跑）
 
+### 📌 关于置顶（⭐ 2026-10-25 加）
+
+```
+python bili.py pin <BV号> --rpid <rpid>            # 置顶
+python bili.py pin <BV号> --rpid <rpid> --action off  # 取消置顶
+```
+
+- 🔴 **绝不自动置顶** —— 发评论时永远不置顶，只有用户明确说「置顶」才调这条
+- 命令内部**强制用大号凭证**（bili-studio），因为置顶只有视频作者本人能做，小号会报 -403
+- 刚发的评论要等几秒才能被索引，命令内置了 3 次重试（-404 时自动重试）
+
 ```bat
 python bili.py status
 python bili.py search "关键词" --num 42 --order pubdate    :: pubdate=最新
@@ -146,6 +157,8 @@ python bili.py reply BVxxxxxxxxxx "正文" --controversy yes             :: 声�
 python bili.py dm BVxxxxxxxxxx "正文"                      :: 发私信（开头自动带 BV 号；dmOnly 才放行）
 python bili.py dms --hours 24                              :: 列名单内的人发的私信（只看 summonMasters）
 python bili.py dm-reply "正文" --uid 37459266               :: 直接回一条私信（不带 BV，不受 dmOnly 限制）
+python bili.py pin BVxxxxxxxxxx --rpid 318127528561        :: 置顶一条评论（自动用大号凭证）
+python bili.py pin BVxxxxxxxxxx --rpid 318127528561 --action off  :: 取消置顶
 python bili.py login                                       :: 重新扫码（阻塞轮询）
 python bili.py whoami
 python bili.py ups                                         :: 看固定 UP 主名单与各自最新投稿

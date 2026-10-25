@@ -798,6 +798,75 @@ async def cmd_replies_to(args):
     return 0
 
 
+def _load_master_credential():
+    """读大号（绝区拾叁，mid 37459266）的凭证。
+    置顶 / 删评论这类“只有作者能做”的事必须用它。
+    """
+    try:
+        from bilibili_api import Credential
+        p = Path.home() / ".dsh" / "bili-studio" / "bili_credential.json"
+        c = json.loads(p.read_text(encoding="utf-8"))
+        return Credential(
+            sessdata=c.get("sessdata"), bili_jct=c.get("bili_jct"),
+            buvid3=c.get("buvid3"), dedeuserid=c.get("dedeuserid"),
+        )
+    except Exception:
+        return None
+
+
+async def cmd_pin(args):
+    """置顶 / 取消置顶一条评论。
+
+    ⭐ 2026-10-25 加：手动触发，不自动 —— 发评论时绝不会自己置顶。
+       只有你明确说「置顶」时才调。
+    """
+    from bilibili_api.comment import Comment, CommentResourceType
+    # ⭐ 置顶只能用【视频作者本人】的凭证 —— 小号会报 -403。
+    #   所以这里写死读大号（bili-studio）的凭证，不走 core.load_credential()。
+    cred = _load_master_credential()
+    if not cred:
+        emit({"ok": False, "error": "未找到大号凭证（bili-studio/bili_credential.json）—— 置顶必须用作者本人号"})
+        return 4
+
+    bv = str(args.bvid).strip()
+    if not re.fullmatch(r"BV[0-9A-Za-z]{10}", bv):
+        emit({"ok": False, "error": "单号格式不对"})
+        return 1
+    rpid = int(args.rpid)
+    if rpid <= 0:
+        emit({"ok": False, "error": "rpid 不对"})
+        return 1
+
+    try:
+        v = core.video.Video(bvid=bv, credential=cred)
+        info = await v.get_info()
+        aid = info["aid"]
+    except Exception as e:
+        emit({"ok": False, "error": "取视频信息失败：%s" % e})
+        return 3
+
+    want = str(getattr(args, "action", "on") or "on").lower()
+    status = want not in ("off", "no", "false", "0", "取消")
+
+    # 刚发的评论需要等一下才能被索引（不然会 -404）
+    for attempt in range(3):
+        try:
+            cm = Comment(oid=aid, type_=CommentResourceType.VIDEO,
+                         rpid=rpid, credential=cred)
+            await cm.pin(status)
+            emit({"ok": True, "bvid": bv, "rpid": rpid, "pinned": status,
+                  "message": ("已置顶" if status else "已取消置顶")})
+            return 0
+        except Exception as e:
+            msg = str(e)
+            if attempt < 2 and ("-404" in msg or "啥都木有" in msg):
+                await asyncio.sleep(3)
+                continue
+            emit({"ok": False, "error": "置顶失败：%s" % msg[:200]})
+            return 3
+    return 3
+
+
 async def cmd_judge(args):
     """记下「这条视频判过争议了吗」的结果。
 
@@ -1451,6 +1520,12 @@ def main() -> int:
     rt.add_argument("--rpid", required=True)
     rt.add_argument("--hours", type=int, default=2)
     rt.set_defaults(func=cmd_replies_to)
+
+    pn = sub.add_parser("pin", help="置顶 / 取消置顶一条评论（手动触发，不自动）")
+    pn.add_argument("bvid")
+    pn.add_argument("--rpid", required=True)
+    pn.add_argument("--action", default="on", help="on 置顶（默认）/ off 取消")
+    pn.set_defaults(func=cmd_pin)
 
     j = sub.add_parser("judge", help="记下这条视频判过争议了吗")
     j.add_argument("bvid")
