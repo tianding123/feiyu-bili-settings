@@ -572,7 +572,13 @@ def remember_my_reply(bvid: str, rpid: int, root: int, text: str):
                 "at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 "text": str(text)[:60],
             }
-            # 只留最近 200 条
+            # ⭐ 2026-10-25 改：写入时顺手清掉过期的（超过 24 小时）。
+            #   之前只在读的时候过滤，文件里一直囿着没用的。
+            from datetime import timedelta
+            _cutoff = (datetime.now() - timedelta(hours=24)).strftime("%Y-%m-%d %H:%M:%S")
+            data = {k: v for k, v in data.items()
+                    if isinstance(v, dict) and v.get("at", "") >= _cutoff}
+            # 保险丝：万一一天发了很多，最多也只留 200 条
             if len(data) > 200:
                 keys = sorted(data.keys(), key=lambda k: data[k].get("at", ""))[-200:]
                 data = {k: data[k] for k in keys}
