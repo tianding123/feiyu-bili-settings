@@ -513,7 +513,7 @@ export function apply(ctx) {
         'blockedUps',
         'personaFile',
         // ⭐ 2026-10-25：回应召唤（目前只有配置位，功能待接）
-        'respondSummon', 'summonMasters', 'summonAcceptOthers', 'summonRateLimit',
+        'respondSummon', 'summonMasters', 'summonAcceptOthers', 'summonRateLimit', 'summonFallbackAny',
       ])
       const cur = readJson(CFG_FILE, {})
       const next = { ...cur }

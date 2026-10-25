@@ -280,11 +280,12 @@ DEFAULTS = {
     # 默认就指向家目录（换机器也对）；设置页装了转写依赖后会写死成真实路径
     "asrPython": str(Path.home() / ".dsh" / "bili-duty" / ".venv-asr" / "Scripts" / "python.exe"),
     "hfCache": str(Path.home() / ".dsh" / "bili-duty" / ".hf-cache"),
-    # ⭐ 2026-10-25：回应召唤（目前只有配置位，功能待接）
+    # ⭐ 2026-10-25：回应召唤
     "respondSummon": False,
-    "summonMasterMid": 0,
-    "summonKeywords": [],
-    "summonPerRound": 3,
+    "summonMasters": [],
+    "summonAcceptOthers": False,
+    "summonRateLimit": 3,
+    "summonFallbackAny": True,
 }
 
 

@@ -1132,6 +1132,13 @@ window.__ModuleLoader__.load({
                 value: cfg.summonRateLimit, min: 1, max: 20,
                 onChange: (v) => set('summonRateLimit', v),
               }) : null,
+              // ⭐ 2026-10-25 加：目标会话不在线时允许回退
+              h(Toggle, {
+                label: '目标会话不在线时换个会话回',
+                note: '开着的话，设置里选的会话没打开时，用当前活着的会话回应（推荐开）；关掉就宁可这轮不干活',
+                value: cfg.summonFallbackAny !== false,
+                onChange: (v) => set('summonFallbackAny', v),
+              }),
             // 2026-10-25 删：功能已经接了，这句「只做了界面」的提示过时了
           ) : null,
         ),
