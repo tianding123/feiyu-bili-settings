@@ -517,6 +517,22 @@ async def cmd_reply(args):
             })
             return 3
 
+    # ⭐ 2026-10-25 加：发之前先自检（字数 / AI 腔 / 敏感词 / 重复度）
+    #   --force 可以强行绕过
+    if not args.force:
+        _recent = list(load_my_replies(max_hours=24).values())
+        _ok, _problems, _warns = check_comment_text(args.text, _recent)
+        if not _ok:
+            emit({
+                "ok": False,
+                "blocked": True,
+                "reason": "check-failed",
+                "problems": _problems,
+                "warns": _warns,
+                "hint": "自检没过：" + "；".join(_problems) + "。改完再发，确实要发就加 --force。",
+            })
+            return 5
+
     # ⚠️ 2026-10-18 修：以前直接把 core.bili_reply 的返回 print 出来 ——
     #    而 bili_reply 失败时返回的是 {"success": false, "error": ...}，
     #    调用方一眼看不出失败（那次真发出去的是 -101 账号未登录，却被报成「成功」）。
@@ -721,6 +737,150 @@ async def cmd_dms(args):
 
     out.sort(key=lambda x: x.get("ts") or 0, reverse=True)
     emit({"ok": True, "count": len(out), "allow": sorted(allow), "items": out})
+    return 0
+
+
+AI_ACTS = [
+    "本鱼认", "我认", "作为AI", "作为 AI", "作为一个AI",
+    "作为一个 AI", "我是一个AI", "作为人工智能",
+    "希望对您有帮助", "很高兴为您", "当然可以",
+]
+
+SENSITIVE = [
+    "死人", "滚你", "傻逼", "脑残", "白痴", "刹那",
+]
+
+
+def check_comment_text(text: str, recent=None):
+    """检查一条评论能不能发。返回 (ok, problems[])"""
+
+    problems = []
+    warns = []
+
+    t = (text or "").strip()
+    if not t:
+        problems.append("正文是空的")
+        return False, problems, warns
+
+    # 1. 字数
+    n = len(t)
+    if n > 150:
+        problems.append("超长：%d 字（上限 150）" % n)
+    elif n < 15:
+        warns.append("偏短：%d 字" % n)
+
+    # 2. AI 腔
+    for w in AI_ACTS:
+        if w in t:
+            problems.append("AI 腔：出现「%s」" % w)
+
+    # 3. 敏感词
+    for w in SENSITIVE:
+        if w in t:
+            problems.append("敏感词：「%s」" % w)
+
+    # 4. 跟最近发过的重复度
+    if recent:
+        import difflib
+        for r in recent:
+            old = (r.get("text") or "")[:150]
+            if not old:
+                continue
+            ratio = difflib.SequenceMatcher(None, t, old).ratio()
+            if ratio > 0.75:
+                problems.append("跟最近发过的太像（相似度 %.0f%%）" % (ratio * 100))
+                break
+
+    # 5. 用户名 / @ 没填
+    if "@" in t and len(t.split("@")[-1].strip()) < 2:
+        warns.append("@ 后面好像没名字")
+
+    return (len(problems) == 0), problems, warns
+
+
+async def cmd_check_comment(args):
+    """发之前先自检一遍。⭐ 2026-10-25 加：把自觉变成代码。"""
+    text = str(args.text or "")
+    recent = list(load_my_replies(max_hours=24).values())
+    ok, problems, warns = check_comment_text(text, recent)
+    emit({
+        "ok": True,
+        "pass": ok,
+        "length": len(text),
+        "problems": problems,
+        "warns": warns,
+    })
+    return 0 if ok else 5
+
+
+async def cmd_my_comments(args):
+    """列出自己发过的评论 + 点赞数 + 回复数 + 是否被折叠。
+
+    ⭐ 2026-10-25 加：发完就忘不行 —— 要能看出哪条有人理、哪条沉了、哪条被折叠了。
+    """
+    cred = core.load_credential()
+    if not cred:
+        emit({"ok": False, "error": "未登录"})
+        return 4
+
+    hours = float(getattr(args, "hours", 48) or 48)
+    limit = int(getattr(args, "limit", 30) or 30)
+    mine = load_my_replies(max_hours=int(hours))
+    my_uid = str(getattr(cred, "dedeuserid", "") or "")
+
+    out = []
+    for rpid, info in list(mine.items())[:limit]:
+        bvid = info.get("bvid") or ""
+        if not bvid:
+            continue
+        try:
+            v = core.video.Video(bvid=bvid, credential=cred)
+            vinfo = await v.get_info()
+            aid = vinfo["aid"]
+        except Exception:
+            continue
+
+        # 直接拿这条评论的快照（main 接口里找）
+        found = None
+        try:
+            from bilibili_api.utils.network import Api
+            api = Api(url="https://api.bilibili.com/x/v2/reply/main",
+                      method="GET", verify=True, credential=cred)
+            api.update_params(type=1, oid=aid, mode=3, pn=1, ps=20)
+            r = await api.result
+            d = r.get("data") if isinstance(r.get("data"), dict) else r
+            pool = list(d.get("top_replies") or []) + list(d.get("replies") or [])
+            for x in pool:
+                if str(x.get("rpid")) == str(rpid):
+                    found = x
+                    break
+        except Exception:
+            pass
+
+        item = {
+            "bvid": bvid,
+            "rpid": rpid,
+            "at": info.get("at"),
+            "text": info.get("text"),
+        }
+        if found:
+            item["like"] = found.get("like", 0)
+            item["rcount"] = found.get("rcount", 0)
+            item["state"] = found.get("state", 0)
+            item["folded"] = (found.get("state", 0) != 0)
+            item["text"] = ((found.get("content") or {}).get("message") or info.get("text") or "")[:80]
+        else:
+            item["like"] = None
+            item["rcount"] = None
+            # B站 的 /reply/main 只返回一级评论，楼中楼拿不到统计数据
+            root = int(info.get("root") or 0)
+            item["note"] = ("楼中楼（接口不返回统计数据）"
+                            if root else "首页没拿到（可能已沉底）")
+        out.append(item)
+        await asyncio.sleep(0.3)
+
+    out.sort(key=lambda x: (x.get("like") or 0), reverse=True)
+    emit({"ok": True, "hours": hours, "count": len(out), "items": out})
     return 0
 
 
@@ -1510,6 +1670,15 @@ def main() -> int:
     dms.add_argument("--hours", type=float, default=24)
     dms.add_argument("--mids", default="", help="覆盖名单，逗号分隔")
     dms.set_defaults(func=cmd_dms)
+
+    mc = sub.add_parser("my-comments", help="我的评论效果（点赞/回复/是否折叠）")
+    mc.add_argument("--hours", type=float, default=48)
+    mc.add_argument("--limit", type=int, default=30)
+    mc.set_defaults(func=cmd_my_comments)
+
+    ck = sub.add_parser("check-comment", help="发之前先自检一遍")
+    ck.add_argument("text")
+    ck.set_defaults(func=cmd_check_comment)
 
     mr = sub.add_parser("my-replies", help="列出我自己最近发的评论")
     mr.add_argument("--hours", type=int, default=24)

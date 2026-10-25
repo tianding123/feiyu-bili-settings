@@ -128,6 +128,37 @@ watcher 每轮 → 查这张表里的评论有没有新回复
 
 ## 命令（在家目录 `~/.dsh/bili-duty/` 下跑）
 
+### 🛡️ 发评论前会自动自检（⭐ 2026-10-25 加）
+
+**`bili.py reply` 现在会自动跑一遍自检，不合格直接拒发（exit 5）：**
+
+```
+✗ 超长（>150 字）
+✗ AI 腔：本鱼认 / 我认 / 作为AI / 作为一个AI / 作为人工智能 / 希望对您有帮助 / 很高兴为您 / 当然可以
+✗ 敏感词：死人 / 滚你 / 傻逼 / 脑残 / 白痴 / 刹那
+✗ 跟自己最近 24 小时发过的太像（相似度 > 75%）
+✓ 偏短（<15 字）只警告，不拦
+```
+
+**单独预检：**
+```bash
+python bili.py check-comment "正文"
+# → {"pass": true/false, "problems": [...], "warns": [...]}
+```
+
+**确实要发就加 `--force`**（但想清楚为什么）。
+
+### 📊 看自己评论的效果
+
+```bash
+python bili.py my-comments --hours 48 --limit 30
+# → 每条：BV / rpid / 点赞 / 回复数 / 是否被折叠 / 正文前 80 字
+```
+
+- ⚠️ **楼中楼里的回复拿不到点赞数** —— B站 的 `/reply/main` 只返回一级评论，
+  命令会标注「楼中楼（接口不返回统计数据）」
+- 按点赞数从高到低排，能一眼看出哪条有人理
+
 ### 📌 关于置顶（⭐ 2026-10-25 加）
 
 ```
@@ -159,6 +190,8 @@ python bili.py dms --hours 24                              :: 列名单内的人
 python bili.py dm-reply "正文" --uid 37459266               :: 直接回一条私信（不带 BV，不受 dmOnly 限制）
 python bili.py pin BVxxxxxxxxxx --rpid 318127528561        :: 置顶一条评论（自动用大号凭证）
 python bili.py pin BVxxxxxxxxxx --rpid 318127528561 --action off  :: 取消置顶
+python bili.py my-comments --hours 48                      :: 我的评论效果（点赞/回复/是否被折叠）
+python bili.py check-comment "正文"                        :: 发之前自检（字数/AI腔/重复度）
 python bili.py login                                       :: 重新扫码（阻塞轮询）
 python bili.py whoami
 python bili.py ups                                         :: 看固定 UP 主名单与各自最新投稿
