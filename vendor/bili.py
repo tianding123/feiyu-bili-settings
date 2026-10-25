@@ -528,7 +528,14 @@ async def cmd_reply(args):
     except Exception:
         res = {"raw": raw}
     if res.get("success"):
-        emit({"ok": True, "bvid": args.bvid, "message": "评论已发送成功"})
+        # ⭐ 2026-10-25：记下这条评论，供「回复里的 @」检测用
+        try:
+            remember_my_reply(args.bvid, res.get("rpid") or 0,
+                              args.root or 0, args.text)
+        except Exception:
+            pass
+        emit({"ok": True, "bvid": args.bvid, "message": "评论已发送成功",
+              "rpid": res.get("rpid")})
         return 0
     emit({
         "ok": False,
@@ -537,6 +544,54 @@ async def cmd_reply(args):
         "hint": "这次评论没发出去。若报 -101 账号未登录 ⇒ 凭证只能读不能写，需要重新扫码或检查账号状态。",
     })
     return 1
+
+
+def _my_replies_file() -> Path:
+    """记录「我自己发过哪些评论」的小账本。
+    ⭐ 2026-10-25 加：B站 的 @ 通知不收「回复里的 @」，
+       所以要自己去查这些评论有没有新回复。
+    """
+    return CFG_FILE.parent / "my-replies.json"
+
+
+def remember_my_reply(bvid: str, rpid: int, root: int, text: str):
+    """发评论成功后记一条，供后续查回复用。"""
+    if not rpid:
+        return
+    p = _my_replies_file()
+    try:
+        with file_lock(p):
+            data = {}
+            try:
+                data = json.loads(p.read_text(encoding="utf-8"))
+            except Exception:
+                data = {}
+            data[str(rpid)] = {
+                "bvid": str(bvid),
+                "root": int(root or 0),
+                "at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "text": str(text)[:60],
+            }
+            # 只留最近 200 条
+            if len(data) > 200:
+                keys = sorted(data.keys(), key=lambda k: data[k].get("at", ""))[-200:]
+                data = {k: data[k] for k in keys}
+            p.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception:
+        pass   # 记不上也不影响发评论
+
+
+def load_my_replies(max_hours: int = 24):
+    """读最近 N 小时内发的评论。"""
+    try:
+        data = json.loads(_my_replies_file().read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    from datetime import timedelta
+    cutoff = (datetime.now() - timedelta(hours=max_hours)).strftime("%Y-%m-%d %H:%M:%S")
+    return {k: v for k, v in data.items() if isinstance(v, dict) and v.get("at", "") >= cutoff}
 
 
 def _controversy_file() -> Path:
@@ -556,6 +611,80 @@ def controversy_of(bvid: str):
     if not isinstance(item, dict):
         return None
     return bool(item.get("controversial"))
+
+
+async def cmd_my_replies(args):
+    """列出我自己最近发的评论。
+    ⭐ 2026-10-25 加：给「回复里的 @」检测用 —— 先知道自己发过哪些。
+    """
+    hours = int(getattr(args, "hours", 24) or 24)
+    data = load_my_replies(hours)
+    items = []
+    for rpid, v in data.items():
+        items.append({
+            "rpid": int(rpid) if str(rpid).isdigit() else rpid,
+            "bvid": v.get("bvid") or "",
+            "root": v.get("root") or 0,
+            "at": v.get("at") or "",
+            "text": v.get("text") or "",
+        })
+    items.sort(key=lambda x: x.get("at") or "", reverse=True)
+    emit({"ok": True, "hours": hours, "count": len(items), "items": items})
+    return 0
+
+
+async def cmd_replies_to(args):
+    """查某条评论下面的回复（只返回最近 N 小时的）。"""
+    bv = str(args.bvid).strip()
+    if not re.fullmatch(r"BV[0-9A-Za-z]{10}", bv):
+        emit({"ok": False, "error": "单号格式不对"})
+        return 1
+    rpid = int(args.rpid)
+    hours = int(getattr(args, "hours", 2) or 2)
+
+    from bilibili_api.utils.network import Api
+    cred = core.load_credential()
+    if not cred:
+        emit({"ok": False, "error": "未登录"})
+        return 4
+    try:
+        v = core.video.Video(bvid=bv, credential=cred)
+        info = await v.get_info()
+        aid = info["aid"]
+    except Exception as e:
+        emit({"ok": False, "error": "取视频信息失败：%s" % e})
+        return 3
+
+    try:
+        api = Api(url="https://api.bilibili.com/x/v2/reply/reply",
+                  method="GET", verify=True, credential=cred)
+        api.update_params(type=1, oid=aid, root=rpid, pn=1, ps=50)
+        r = await api.result
+    except Exception as e:
+        emit({"ok": False, "error": "取回复失败：%s" % e})
+        return 3
+
+    d = r.get("data") if isinstance(r.get("data"), dict) else r
+    subs = d.get("replies") or []
+    my_uid = str(getattr(cred, "dedeuserid", "") or "")
+    cutoff = time.time() - hours * 3600
+    out = []
+    for s in subs:
+        m = s.get("member") or {}
+        ct = s.get("ctime") or 0
+        if ct and ct < cutoff:
+            continue
+        mid = str(m.get("mid"))
+        out.append({
+            "rpid": s.get("rpid"),
+            "mid": mid,
+            "name": m.get("uname"),
+            "text": ((s.get("content") or {}).get("message") or "")[:300],
+            "ctime": ct,
+            "is_mine": (mid == my_uid),
+        })
+    emit({"ok": True, "bvid": bv, "root": rpid, "count": len(out), "items": out})
+    return 0
 
 
 async def cmd_judge(args):
@@ -1137,6 +1266,16 @@ def main() -> int:
                    help="这条是不是已判为有争议：yes/不传。"
                         "dm-only 策略下传 yes 会被拒，应改走 dm")
     p.set_defaults(func=cmd_reply)
+
+    mr = sub.add_parser("my-replies", help="列出我自己最近发的评论")
+    mr.add_argument("--hours", type=int, default=24)
+    mr.set_defaults(func=cmd_my_replies)
+
+    rt = sub.add_parser("replies-to", help="查某条评论下的回复")
+    rt.add_argument("--bvid", required=True)
+    rt.add_argument("--rpid", required=True)
+    rt.add_argument("--hours", type=int, default=2)
+    rt.set_defaults(func=cmd_replies_to)
 
     j = sub.add_parser("judge", help="记下这条视频判过争议了吗")
     j.add_argument("bvid")
