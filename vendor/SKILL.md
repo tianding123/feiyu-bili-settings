@@ -157,11 +157,20 @@ python bili.py up-feed --since-days <upSinceDays>          :: 查固定 UP 主�
 ### 🔴 判完必须写一条 `judge`（硬要求）
 
 ```bash
-python bili.py judge <BV号> --controversial yes   # 判为有争议
-python bili.py judge <BV号> --controversial no    # 判为没争议
+python bili.py judge <BV号> --controversial yes --reason "评论区指控UP抄袭、作者未回应"
+python bili.py judge <BV号> --controversial no  --reason "评论区都在讨论剧情，无人指控"
 ```
 
 **这条命令把结果写进 `bili-duty/controversy.json`（加锁、防并发）。**
+
+🔴 **`--reason` 必须写**（⭐ 2026-10-25 加，评论区反馈「判争议和写评论是同一个代理，自己判自己」）——
+一句话说清为什么这么判，例如：
+- 「评论区有 3 条高赞指控作者数据造假，作者没回应」
+- 「视频本身在拉踩另一款游戏」
+- 「评论区都在玩梗，没有指控」
+
+**理由会**记进 `controversy.json`**，也要**写进日报**。
+这是给"自己判自己"留的一道事后审计痕迹 —— 判错了，至少能查为什么错。
 
 **然后 `reply` 会自己去查这个文件：**
 
@@ -371,7 +380,14 @@ subagent {
         （一条视频一条私信，别汇总）
 
    ⚠️ **拿不准的，一律当「有争议」处理**（走 ②）
-2. 写日报到 `out/<今天>.md`（可以比报告更简）；
+2. 写日报到 `out/<今天>.md`（可以比报告更简），
+   **但争议判定必须单独列一段**（⭐ 2026-10-25 加，来自评论区建议）：
+   ```
+   ## 争议判定
+   - BV1xxx：有争议 —— 理由：评论区 3 条高赞指控作者数据造假，作者未回应 → author-first 转述原话
+   - BV1yyy：没争议 —— 理由：评论区都在讨论剧情 → 正常评论
+   ```
+   ⚠️ **每条判过的都要写理由**，这是「自己判自己」唯一的事后审计痕迹。
 3. 用 `bili.py mark-seen --items '[{"bv":"...","title":"...","note":"..."}]'` 记进 seen.md
    （**不许直接编辑 seen.md** —— 见红线），再更新 `state.json`（含 `runs` 标记）。
 

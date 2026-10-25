@@ -599,6 +599,16 @@ def _controversy_file() -> Path:
     return CFG_FILE.parent / "controversy.json"
 
 
+def controversy_record(bvid: str):
+    """读某条视频的完整判定记录（含理由）。没判过返回 None。"""
+    try:
+        data = json.loads(_controversy_file().read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    item = data.get(str(bvid))
+    return item if isinstance(item, dict) else None
+
+
 def controversy_of(bvid: str):
     """读某条视频的判定结果。
     返回 True（有争议）/ False（没争议）/ None（没判过）。
@@ -713,6 +723,7 @@ async def cmd_judge(args):
             data = {}
         data[bv] = {
             "controversial": is_yes,
+            "reason": str(getattr(args, "reason", "") or "").strip()[:200],
             "at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         }
         if len(data) > 500:
@@ -1280,6 +1291,7 @@ def main() -> int:
     j = sub.add_parser("judge", help="记下这条视频判过争议了吗")
     j.add_argument("bvid")
     j.add_argument("--controversial", required=True, help="yes 或 no")
+    j.add_argument("--reason", default="", help="判定理由（一句话，写进日报和记录）")
     j.set_defaults(func=cmd_judge)
 
     p = sub.add_parser("mentions", help="列出收到的 @ 消息（回应召唤用）")
