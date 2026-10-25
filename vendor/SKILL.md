@@ -97,6 +97,19 @@ description: 替用户刷B站。用户说「刷B站 / 看B站 / 最近有什么�
 **⚠️ 回应召唤是「一对一回答」，不是「写评论」** ——
 不用加「主人！您关注的UP主更新啦！」那种固定开头，也不用 @ 谁（他就在问你）。
 
+### 🔴 如果是私信召唤（消息里带「这是私信」）
+
+**星级要点：在哪收到就在哪回。私信收到就回私信，绝不去视频底下评论。**
+
+```
+4'. 用 dm-reply 回（不用 reply）：
+    python bili.py dm-reply "正文" --uid <消息里的 mid>
+```
+
+- ⚠️ `dm-reply` **不带 BV 号**，就是直接回一句话
+- ⚠️ 私信不需要读视频字幕（除非主人问的就是某个视频）
+- ⚠️ 只回 `summonMasters` 名单里的人 —— 陌生人的私信一律不回
+
 ## 命令（在家目录 `~/.dsh/bili-duty/` 下跑）
 
 ```bat
@@ -115,6 +128,8 @@ python bili.py reply BVxxxxxxxxxx "正文" --controversy yes             :: 声�
    `commentPolicy=dm-only` 时它会直接拒绝发送（exit 3），逼你改走私信。
    这是**代码级硬闸**，不是流程约定：忘了走流程也发不出去。
 python bili.py dm BVxxxxxxxxxx "正文"                      :: 发私信（开头自动带 BV 号；dmOnly 才放行）
+python bili.py dms --hours 24                              :: 列名单内的人发的私信（只看 summonMasters）
+python bili.py dm-reply "正文" --uid 37459266               :: 直接回一条私信（不带 BV，不受 dmOnly 限制）
 python bili.py login                                       :: 重新扫码（阻塞轮询）
 python bili.py whoami
 python bili.py ups                                         :: 看固定 UP 主名单与各自最新投稿

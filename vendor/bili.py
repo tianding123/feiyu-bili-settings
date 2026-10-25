@@ -623,6 +623,100 @@ def controversy_of(bvid: str):
     return bool(item.get("controversial"))
 
 
+async def cmd_dms(args):
+    """列出私信会话里「名单内的人」发来的最新消息。
+
+    ⭐ 2026-10-25 加：只看名单里的人（summonMasters / 或 --mids 指定）。
+       陌生人的私信一律不回。
+    """
+    from bilibili_api import session
+    cred = core.load_credential()
+    if not cred:
+        emit({"ok": False, "error": "未登录"})
+        return 4
+
+    cfg = load_cfg()
+    # 名单：--mids 优先，否则用 config 的 summonMasters
+    raw_mids = str(getattr(args, "mids", "") or "").strip()
+    if raw_mids:
+        allow = set(x.strip() for x in raw_mids.replace("，", ",").split(",") if x.strip())
+    else:
+        allow = set()
+        for u in (cfg.get("summonMasters") or []):
+            mid = str((u or {}).get("mid") or "").strip()
+            if mid and mid != "0":
+                allow.add(mid)
+
+    if not allow:
+        emit({"ok": True, "count": 0, "items": [],
+              "hint": "名单是空的（summonMasters）—— 不看任何私信"})
+        return 0
+
+    sessions = []
+    try:
+        r = await session.get_sessions(cred, session_type=1)
+        data = r.get("data") if isinstance(r.get("data"), dict) else r
+        sessions = data.get("session_list") or []
+    except Exception as e:
+        emit({"ok": False, "error": "取会话列表失败：%s" % e})
+        return 3
+
+    hours = float(getattr(args, "hours", 24) or 24)
+    cutoff = time.time() - hours * 3600
+    my_uid = str(getattr(cred, "dedeuserid", "") or "")
+    out = []
+    for s in sessions:
+        talker = str(s.get("talker_id") or "")
+        if talker not in allow:
+            continue
+        last = s.get("last_msg") or {}
+        # last_msg 的 content 是 JSON 字符串
+        text = ""
+        try:
+            c = json.loads(last.get("content") or "{}")
+            text = str(c.get("content") or c.get("text") or "")[:300]
+        except Exception:
+            text = str(last.get("content") or "")[:300]
+        # 去拉散详情：只要最近 N 小时内的
+        msgs = []
+        try:
+            mr = await session.fetch_session_msgs(
+                talker_id=int(talker), credential=cred, session_type=1)
+            md = mr.get("data") if isinstance(mr.get("data"), dict) else mr
+            for m in (md.get("messages") or []):
+                ts = m.get("timestamp") or 0
+                if ts and ts < cutoff:
+                    continue
+                suid = str(m.get("sender_uid") or "")
+                mc = ""
+                try:
+                    cc = json.loads(m.get("content") or "{}")
+                    mc = str(cc.get("content") or cc.get("text") or "")[:300]
+                except Exception:
+                    mc = str(m.get("content") or "")[:300]
+                msgs.append({"ts": ts, "from": suid, "text": mc, "is_mine": (suid == my_uid)})
+            await asyncio.sleep(0.3)
+        except Exception:
+            pass
+
+        # 只要最后一条是对方发的（我没回），就算待回复
+        from_them = [x for x in msgs if not x["is_mine"]]
+        if not from_them:
+            continue
+        last_them = from_them[-1]
+        out.append({
+            "mid": talker,
+            "name": "",
+            "last_text": last_them.get("text") or text,
+            "ts": last_them.get("ts") or 0,
+            "msgs": msgs[-10:],
+        })
+
+    out.sort(key=lambda x: x.get("ts") or 0, reverse=True)
+    emit({"ok": True, "count": len(out), "allow": sorted(allow), "items": out})
+    return 0
+
+
 async def cmd_my_replies(args):
     """列出我自己最近发的评论。
     ⭐ 2026-10-25 加：给「回复里的 @」检测用 —— 先知道自己发过哪些。
@@ -772,6 +866,59 @@ async def cmd_mentions(args):
     out = out[:limit]
     emit({"ok": True, "count": len(out), "items": out})
     return 0
+
+
+async def cmd_dm_reply(args):
+    """直接回一条私信（不带 BV 号，不受 dmOnly 限制）。
+
+    ⭐ 2026-10-25 加：回应召唤用 —— 主人发私信来，自然要直接回他，
+       不能像「仅私信不评论」那样每条开头都得带 BV 号。
+
+    收件人必须在 summonMasters 名单里（或显式传 --uid）。
+    """
+    from bilibili_api import session
+    cred = core.load_credential()
+    if not cred:
+        emit({"ok": False, "error": "未登录"})
+        return 4
+
+    cfg = load_cfg()
+    to_uid = int(getattr(args, "uid", 0) or 0)
+    if to_uid <= 0:
+        masters = cfg.get("summonMasters") or []
+        if not masters:
+            emit({"ok": False, "error": "没给 --uid，而 summonMasters 名单是空的"})
+            return 2
+        to_uid = int((masters[0] or {}).get("mid") or 0)
+        if to_uid <= 0:
+            emit({"ok": False, "error": "名单第一个没有有效 mid"})
+            return 2
+
+    text = str(args.text or "").strip()
+    if not text:
+        emit({"ok": False, "error": "正文是空的"})
+        return 2
+    if len(text) > 500:
+        text = text[:500]
+
+    try:
+        r = await session.send_msg(
+            credential=cred,
+            msg_type=session.EventType.TEXT,
+            receiver_id=to_uid,
+            content=text,   # ⭐ send_msg 内部会自己 json.dumps({"content": ...})，别包两层
+        )
+    except Exception as e:
+        emit({"ok": False, "error": "发私信失败：%s" % e})
+        return 3
+
+    ok = True
+    if isinstance(r, dict):
+        code = r.get("code")
+        if code not in (0, None):
+            ok = False
+    emit({"ok": ok, "to_uid": to_uid, "message": ("私信已发送" if ok else "可能失败"), "raw": r if not ok else None})
+    return 0 if ok else 3
 
 
 async def cmd_dm(args):
@@ -1277,6 +1424,16 @@ def main() -> int:
                    help="这条是不是已判为有争议：yes/不传。"
                         "dm-only 策略下传 yes 会被拒，应改走 dm")
     p.set_defaults(func=cmd_reply)
+
+    dr = sub.add_parser("dm-reply", help="直接回一条私信（不带 BV）")
+    dr.add_argument("text")
+    dr.add_argument("--uid", type=int, default=0, help="收件人；不给就用名单第一个")
+    dr.set_defaults(func=cmd_dm_reply)
+
+    dms = sub.add_parser("dms", help="列出名单内的人发的私信")
+    dms.add_argument("--hours", type=float, default=24)
+    dms.add_argument("--mids", default="", help="覆盖名单，逗号分隔")
+    dms.set_defaults(func=cmd_dms)
 
     mr = sub.add_parser("my-replies", help="列出我自己最近发的评论")
     mr.add_argument("--hours", type=int, default=24)
